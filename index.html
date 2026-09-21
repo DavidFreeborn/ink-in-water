@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="description" content="Explore how ink stretches into sheets and filaments in water. A three-dimensional fluid model with adjustable currents, container shapes and two coloured inks.">
+    <title>Ink in Water</title>
+    <link rel="canonical" href="https://davidfreeborn.github.io/ink-in-water/">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Ink in Water — A model of fibrillation">
+    <meta property="og:description" content="An interactive three-dimensional model of ink stretching and mixing in water.">
+    <meta property="og:url" content="https://davidfreeborn.github.io/ink-in-water/">
+    <meta property="og:image" content="https://davidfreeborn.github.io/ink-in-water/preview.png">
+    <meta property="og:image:alt" content="Blue ink spreading into fine filaments in a water container.">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main id="ink-app" class="experiment" aria-labelledby="page-title">
+      <header class="introduction">
+        <div class="heading">
+          <h1 id="page-title">Ink in Water</h1>
+          <p id="experiment-description">A model of fibrillation</p>
+        </div>
+        <button id="expand-view" type="button" hidden>Expand view</button>
+      </header>
+
+      <figure class="experiment-figure" aria-describedby="experiment-description">
+        <div id="ink-stage" class="ink-stage" aria-busy="true">
+          <canvas id="ink-canvas" width="1440" height="1080" role="img" aria-label="Three-dimensional ink concentration in a volume of water">
+            A volume rendering of ink moving through water. The controls change the initial currents, ink densities, colours, container and viewing angle.
+          </canvas>
+          <svg id="boundary-outline" class="boundary-outline" aria-hidden="true" focusable="false" hidden></svg>
+          <p id="loading" class="stage-message" role="status">Preparing the water…</p>
+          <p id="sim-error" class="stage-message stage-error" role="alert" hidden></p>
+        </div>
+
+        <div class="controls" aria-label="Simulation controls">
+          <div class="playback" role="group" aria-label="Playback">
+            <button type="button" id="toggle" aria-label="Pause simulation">Pause</button>
+            <button type="button" id="step" aria-label="Advance one step while paused">Step</button>
+            <button type="button" id="reset">Reset</button>
+          </div>
+          <div class="parameter">
+            <div class="parameter-heading">
+              <label for="speed">Speed</label>
+              <output id="speed-value" for="speed">1×</output>
+            </div>
+            <input id="speed" type="range" min="0.25" max="6" step="0.25" value="1">
+          </div>
+          <div class="parameter">
+            <div class="parameter-heading">
+              <label for="current-strength">Currents</label>
+              <output id="current-strength-value" for="current-strength">1×</output>
+            </div>
+            <input id="current-strength" type="range" min="0" max="3" step="0.05" value="1" aria-label="Initial current strength">
+          </div>
+          <div class="parameter select-parameter boundary-parameter">
+            <label for="boundary">Boundary</label>
+            <select id="boundary">
+              <option value="container" selected>Container</option>
+              <option value="periodic">Torus</option>
+            </select>
+          </div>
+          <div id="container-shape-control" class="parameter select-parameter">
+            <label for="container-shape">Shape</label>
+            <select id="container-shape">
+              <option value="cuboid" selected>Cuboid</option>
+              <option value="cylinder">Cylinder</option>
+              <option value="sphere">Sphere</option>
+            </select>
+          </div>
+          <div class="parameter density-parameter">
+            <div class="parameter-heading">
+              <label for="density">Density</label>
+              <output id="density-value" for="density">0.04%</output>
+            </div>
+            <input id="density" type="range" min="-0.4" max="1.2" step="0.01" value="0.04" aria-label="Density contrast of first ink">
+          </div>
+          <div class="parameter select-parameter">
+            <label for="ink-colour">Colour</label>
+            <select id="ink-colour" aria-label="Colour of first ink">
+              <option value="blue" selected>Blue</option>
+              <option value="amber">Amber</option>
+              <option value="red">Red</option>
+              <option value="green">Green</option>
+              <option value="violet">Violet</option>
+              <option value="black">Black</option>
+            </select>
+          </div>
+          <label class="second-ink-toggle" for="second-ink">
+            <input id="second-ink" type="checkbox" aria-controls="second-ink-controls">
+            <span>Second ink</span>
+          </label>
+          <div id="second-ink-controls" class="ink-pair" role="group" aria-label="Second ink" hidden>
+            <div class="parameter">
+              <div class="parameter-heading">
+                <label for="density-2">Density</label>
+                <output id="density-2-value" for="density-2">0.08%</output>
+              </div>
+              <input id="density-2" type="range" min="-0.4" max="1.2" step="0.01" value="0.08" aria-label="Density contrast of second ink">
+            </div>
+            <div class="parameter select-parameter">
+              <label for="ink-colour-2">Colour</label>
+              <select id="ink-colour-2" aria-label="Colour of second ink">
+                <option value="blue">Blue</option>
+                <option value="amber" selected>Amber</option>
+                <option value="red">Red</option>
+                <option value="green">Green</option>
+                <option value="violet">Violet</option>
+                <option value="black">Black</option>
+              </select>
+            </div>
+          </div>
+          <div class="parameter select-parameter">
+            <label for="quality">Resolution</label>
+            <select id="quality">
+              <option value="standard" selected>Standard</option>
+              <option value="fine">Fine</option>
+            </select>
+          </div>
+          <div class="parameter">
+            <div class="parameter-heading">
+              <label for="angle">View</label>
+              <output id="angle-value" for="angle">0°</output>
+            </div>
+            <input id="angle" type="range" min="-90" max="90" step="1" value="0" aria-label="View angle">
+          </div>
+          <div class="parameter seed-parameter">
+            <label for="seed">Seed</label>
+            <div class="seed-controls">
+              <input id="seed" type="number" min="0" max="4294967295" step="1" value="1" inputmode="numeric">
+              <button type="button" id="random-seed">New seed</button>
+            </div>
+          </div>
+          <span id="sim-status" class="visually-hidden" role="status" aria-live="polite">Preparing</span>
+        </div>
+      </figure>
+
+      <details class="model-details">
+        <summary>Model description</summary>
+<div class="model-copy">
+  <section aria-labelledby="fluid-model-heading">
+    <h2 id="fluid-model-heading">How the ink stretches</h2>
+    <p>Different parts of a drop move at different velocities, stretching the dye into sheets and filaments. Molecular diffusion gradually erases the concentration gradients across these structures.</p>
+    <p>The model follows dissolved dye in three dimensions. Each concentration <i>c</i><sub>i</sub> is scaled to equal one in the initial ink solution. For two inks, the fractional density change is <i>b</i> = β<sub>1</sub><i>c</i><sub>1</sub> + β<sub>2</sub><i>c</i><sub>2</sub>, giving density ρ = ρ<sub>0</sub>(1 + <i>b</i>), where ρ<sub>0</sub> is water density and β<sub>i</sub> is each ink’s fractional density contrast. With one ink, <i>c</i><sub>2</sub> = 0. The Boussinesq approximation retains these small density differences only in buoyancy.</p>
+
+    <div class="equation">
+      <span class="equation-label">Incompressibility</span>
+      <math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mi>∇</mi><mo>·</mo><mi mathvariant="bold">u</mi><mo>=</mo><mn>0</mn></math>
+    </div>
+    <div class="equation">
+      <span class="equation-label">Momentum</span>
+      <math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mtable columnalign="left" rowspacing="0.3em">
+        <mtr><mtd><mfrac><mrow><mo>∂</mo><mi mathvariant="bold">u</mi></mrow><mrow><mo>∂</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mo>(</mo><mi mathvariant="bold">u</mi><mo>·</mo><mi>∇</mi><mo>)</mo><mi mathvariant="bold">u</mi></mtd></mtr>
+        <mtr><mtd><mo>=</mo><mo>−</mo><mi>∇</mi><mi>π</mi><mo>+</mo><mi>ν</mi><msup><mi>∇</mi><mn>2</mn></msup><mi mathvariant="bold">u</mi><mo>−</mo><mi>g</mi><mi>b</mi><msub><mi mathvariant="bold">e</mi><mi>y</mi></msub></mtd></mtr>
+      </mtable></math>
+    </div>
+    <div class="equation">
+      <span class="equation-label">Transport of each ink</span>
+      <math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mfrac><mrow><mo>∂</mo><msub><mi>c</mi><mi>i</mi></msub></mrow><mrow><mo>∂</mo><mi>t</mi></mrow></mfrac><mo>+</mo><mi>∇</mi><mo>·</mo><mo>(</mo><msub><mi>c</mi><mi>i</mi></msub><mi mathvariant="bold">u</mi><mo>)</mo><mo>=</mo><mi>D</mi><msup><mi>∇</mi><mn>2</mn></msup><msub><mi>c</mi><mi>i</mi></msub></math>
+    </div>
+
+    <p>Here <b>u</b> is velocity, <i>t</i> is time, π is pressure divided by water density after subtracting hydrostatic pressure, and <b>e</b><sub>y</sub> is the upward unit vector. The equations conserve fluid volume, evolve velocity under pressure, viscosity and buoyancy, and transport each ink through the shared flow.</p>
+    <p>Kinematic viscosity is ν = 10<sup>−6</sup> m² s<sup>−1</sup>, dye diffusivity is <i>D</i> = 10<sup>−9</sup> m² s<sup>−1</sup>, and gravity is <i>g</i> = 9.81 m s<sup>−2</sup>.</p>
+    <p>The solver transports velocity, applies viscosity and buoyancy, then solves for pressure to keep the flow nearly incompressible. Each step uses three pressure multigrid V-cycles for curved containers and two elsewhere. Dye leaving a grid cell enters its neighbour, preserving the total amount of each ink.</p>
+    <p>Speed sets the requested number of fixed steps per second without changing their duration or the physical parameters; hardware may limit the actual rate. Changing Currents sets a new initial flow and restarts the experiment; zero starts at rest. Positive Density contrast drives sinking, negative values drive rising, and zero removes that ink’s buoyancy contribution. Fine uses smaller grid cells and more tracer samples.</p>
+  </section>
+
+  <section aria-labelledby="boundary-model-heading">
+    <h2 id="boundary-model-heading">What the boundaries do</h2>
+    <p>The cuboid, cylinder and sphere are sealed containers. Water cannot cross their walls and can slide along them without friction (free-slip). Dye has zero flux through a wall. Curved containers are approximated by stair-step surfaces made from grid cells; the velocity, dye and reflected tracers use these same walls.</p>
+    <p>The torus joins opposite faces of a cuboid: all fields are periodic, and tracers crossing a face re-enter opposite. Its buoyancy uses <i>b</i> − 〈<i>b</i>〉, where 〈<i>b</i>〉 is the volume mean, removing uniform acceleration of the whole fluid.</p>
+  </section>
+
+  <section aria-labelledby="dye-light-heading">
+    <h2 id="dye-light-heading">How colour is formed</h2>
+    <p>Grid concentrations determine buoyancy. The image uses finer tracer samples, each carrying a fixed amount of one ink. Away from walls, a tracer’s position <b>X</b> follows</p>
+    <div class="equation">
+      <span class="equation-label">Tracer motion</span>
+      <math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mtable columnalign="left" rowspacing="0.3em">
+        <mtr><mtd><mi mathvariant="normal">d</mi><mi mathvariant="bold">X</mi><mo>=</mo><msub><mi mathvariant="bold">u</mi><mi>h</mi></msub><mo>(</mo><mi mathvariant="bold">X</mi><mo>,</mo><mi>t</mi><mo>)</mo><mi mathvariant="normal">d</mi><mi>t</mi></mtd></mtr>
+        <mtr><mtd><mspace width="2em"/><mo>+</mo><msqrt><mn>2</mn><mi>D</mi></msqrt><mi mathvariant="normal">d</mi><mi mathvariant="bold">W</mi></mtd></mtr>
+      </mtable></math>
+    </div>
+    <p><b>u</b><sub>h</sub> is the interpolated grid velocity. Independent Brownian motion <b>W</b> represents molecular diffusion with the same <i>D</i>: each time step Δ<i>t</i> adds a Gaussian displacement of variance 2<i>D</i>Δ<i>t</i> per coordinate.</p>
+    <p>Normalised Gaussian kernels spread the samples into an image of concentration integrated along viewing rays. Beer–Lambert absorption converts the two ink amounts into transmitted colour. Their absorption adds where they overlap. Colour choices set illustrative absorption coefficients and leave the dynamics unchanged.</p>
+  </section>
+
+  <section aria-labelledby="scope-heading">
+    <h2 id="scope-heading">What limits the model</h2>
+    <p>The fluid grid has 112 × 168 × 112 cells at Standard resolution and 160 × 240 × 160 at Fine. Flow advances in 0.01 s steps; dye transport uses smaller substeps when needed for stability.</p>
+    <p>Fine optical filaments do not alter the coarser concentration field driving buoyancy. Grid spacing, numerical diffusion, tracer sampling and optical smoothing limit the detail. Velocity interpolation near stair-step corners introduces additional transport error. The model describes idealised miscible dye and omits pigment settling, surface chemistry, variable viscosity, refraction and light scattering.</p>
+    <p>Physical background: <a href="https://doi.org/10.1017/S0022112001005870">Young et al. (2001)</a>, buoyant miscible flow; <a href="https://doi.org/10.1103/PhysRevE.54.424">Arecchi et al. (1996)</a>, drop fragmentation; <a href="https://doi.org/10.1017/jfm.2022.771">Meunier &amp; Villermaux (2022)</a>, scalar stretching and mixing.</p>
+  </section>
+</div>
+      </details>
+      <noscript><p class="no-script">This simulation needs JavaScript. The description above explains the physical process.</p></noscript>
+    </main>
+    <script src="boundary-view.js"></script>
+    <script src="interface.js"></script>
+    <script src="ink.js"></script>
+  </body>
+</html>
