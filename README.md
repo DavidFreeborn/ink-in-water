@@ -12,9 +12,9 @@ python -m http.server 8765 --bind 127.0.0.1
 
 Then visit http://127.0.0.1:8765. WebGL 2 and floating-point render targets are required; hardware acceleration is recommended. Fine resolution uses more graphics memory and computation. Unsupported floating-point blending falls back to volume rendering the fluid-grid concentration.
 
-Choose a cuboid, cylinder or sphere with sealed, free-slip walls, or a fully periodic volume (a three-dimensional torus). Curved walls are approximated by an inscribed voxel surface shared by the fluid, dye and tracers. The camera shows the whole volume, with an adjustable viewing angle and fullscreen option.
+Choose a cuboid, cylinder or sphere with sealed, free-slip walls, or a fully periodic volume (a three-dimensional torus). Curved walls are approximated by an inscribed voxel surface shared by the fluid, dye and tracers. The camera shows the whole volume, with a full 360° viewing angle and fullscreen option.
 
-Initial current strength varies continuously from still water to three times the default. Density contrast can be positive, zero or negative. An optional second ink has an independent density and colour; both inks move through the same fluid. Colour changes absorption only. The default remains a single blue ink.
+Initial current strength varies continuously from still water to three times the default. Density contrast can be positive, zero or negative. Add up to 16 inks, each with an independent density and colour, moving through the same fluid. Select an ink to edit it using the colour picker or an exact six-digit hex value. Colour changes absorption only. More inks increase graphics memory and computation; the solver retains the selected resolution and tracer detail. The default remains a single blue ink.
 
 `index.html` and `styles.css` provide the interface; `ink.js` contains the solver and rendering, `boundary-view.js` projects the container outline, and `interface.js` handles fullscreen. Read `MODEL.md` for equations, methods, references and limitations. The visual style follows David Freeborn's Scholarly Instrumental Modernism and Scholarly Typographic Rationalism.
 

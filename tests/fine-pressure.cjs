@@ -10,7 +10,7 @@ const instrumented=source.replace('window.InkSimulation={','window.InkSimulation
  const hierarchy=await page.evaluate(()=>InkSimulation.pressureHierarchy());assert.deepEqual(hierarchy,[[160,240,160],[80,120,80],[40,60,40],[20,30,20],[10,15,10]]);
  const result={hierarchy,modes:{}};
  for(const mode of ['container','periodic']){
-  await page.locator('#boundary').selectOption(mode);await page.locator('#reset').click();
+  await page.locator('#domain').selectOption(mode==='container'?'cuboid':'periodic');await page.locator('#reset').click();
   const initial=await page.evaluate(()=>InkSimulation.diagnostics());
   assert(initial.divergenceAfter<2e-5,mode+' initial velocity must be projected');
   await page.evaluate(()=>InkSimulation.step(20));const after=await page.evaluate(()=>InkSimulation.diagnostics());

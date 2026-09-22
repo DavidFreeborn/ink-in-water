@@ -31,8 +31,8 @@
   in vec2 uv;
   out vec4 outColor;
   uniform vec3 n;
-  uniform float columns, h, dt, time, beta, beta2, meanConcentration, meanConcentration2;
-  uniform highp int boundaryMode, geometryMode, sceneSeed, dualInk;
+  uniform float columns, h, dt, time;
+  uniform highp int boundaryMode, geometryMode, sceneSeed;
   uniform float fluidCount;
   uniform vec2 shapePhase;
   uniform vec3 currentPhase;
@@ -68,7 +68,7 @@
     // Used for projected fields only; provisional faces are handled explicitly.
     return at(s,q).xyz;
   }
-  vec2 concentrationAt(sampler2D s,ivec3 q){return at(s,scalarCell(q)).rg;}
+  vec4 concentrationAt(sampler2D s,ivec3 q){return at(s,scalarCell(q));}
   float pressureAt(sampler2D s,ivec3 q){return at(s,q).r;}
   vec4 interp(sampler2D s,vec3 p){
     p=boundaryMode==1?mod(p-1.,n-2.)+1.:clamp(p,vec3(0),n-1.); float z=floor(p.z); vec2 size=vec2(textureSize(s,0));
@@ -99,7 +99,7 @@
     const uniforms={};for(let i=0;i<gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);i++){const u=gl.getActiveUniform(p,i);uniforms[u.name]={loc:gl.getUniformLocation(p,u.name),type:u.type};}
     return programs[name]={p,uniforms};
   }
-  let fields=[], levels=[], velocity, dye, forwardV, forwardC, h, dims, speed, reductions=[], particles, particleIds, particleCount=0, particleSide=128, opticalField;
+  let fields=[], levels=[], velocity, scalarGroups=[], buoyancy, forwardV, forwardC, h, dims, speed, reductions=[], tracerSets=[], particleSide=128, opticalField, opticalScratch;
   const renderState={program:null,width:0,height:0,activeUnit:-1,textures:[]};
   function invalidateRenderState(){renderState.program=null;renderState.width=0;renderState.height=0;renderState.activeUnit=-1;renderState.textures=[];}
   const particleRendering=!!gl.getExtension('EXT_float_blend');
@@ -123,7 +123,7 @@
     const width=target?target.width:canvas.width,height=target?target.height:canvas.height;
     if(renderState.width!==width||renderState.height!==height){gl.viewport(0,0,width,height);renderState.width=width;renderState.height=height;}
     const g=target?target.g:velocity[0].g;
-    const vals={n:g.n,columns:g.columns,h:g.h,dt:DT,time:simTime,beta:density/100,beta2:density2/100,dualInk:secondInk?1:0,boundaryMode:boundary==='periodic'?1:0,geometryMode:boundary==='periodic'||containerShape==='cuboid'?0:containerShape==='cylinder'?1:2,fluidCount:g.fluidCount||1,meanConcentration,meanConcentration2,sceneSeed:experimentSeed|0,shapePhase,currentPhase,...extra};
+    const vals={n:g.n,columns:g.columns,h:g.h,dt:DT,time:simTime,boundaryMode:boundary==='periodic'?1:0,geometryMode:boundary==='periodic'||containerShape==='cuboid'?0:containerShape==='cylinder'?1:2,fluidCount:g.fluidCount||1,sceneSeed:experimentSeed|0,shapePhase,currentPhase,...extra};
     if(p.uniforms.geometry)textures={...textures,geometry:g.geometry||levels[0].geometry};
     let unit=0;
     for(const [key,f]of Object.entries(textures)){const u=p.uniforms[key];if(!u)continue;
@@ -132,15 +132,30 @@
     }
     for(const [key,v]of Object.entries(vals)){const u=p.uniforms[key];if(!u)continue;
       if(u.type===gl.FLOAT||u.type===gl.INT){if(u.value===v)continue;u.value=v;if(u.type===gl.FLOAT)gl.uniform1f(u.loc,v);else gl.uniform1i(u.loc,v);}
-      else if(u.type===gl.FLOAT_VEC2||u.type===gl.FLOAT_VEC3){const count=u.type===gl.FLOAT_VEC2?2:3;if(u.value&&u.value.every((x,i)=>x===v[i]))continue;u.value=Array.from(v).slice(0,count);if(count===2)gl.uniform2fv(u.loc,v);else gl.uniform3fv(u.loc,v);}
+      else if(u.type===gl.FLOAT_VEC2||u.type===gl.FLOAT_VEC3||u.type===gl.FLOAT_VEC4){const count=u.type===gl.FLOAT_VEC2?2:u.type===gl.FLOAT_VEC3?3:4;if(u.value&&u.value.every((x,i)=>x===v[i]))continue;u.value=Array.from(v).slice(0,count);if(count===2)gl.uniform2fv(u.loc,v);else if(count===3)gl.uniform3fv(u.loc,v);else gl.uniform4fv(u.loc,v);}
     }
     gl.drawArrays(primitive,0,count);
   }
   let DT=.01;
-  let simTime=0, stepIndex=0, density=.04, angle=0, running=!reduced.matches, lastFrame=0, accumulator=0, raf=0, destroyed=false, visible=true;
-  let baseMass=0, meanConcentration=0, meanConcentration2=0, quality='standard', initialMotion='gentle', boundary='container',containerShape='cuboid',currentStrength=1;
-  let secondInk=false, density2=.08, inkColour='blue', inkColour2='amber';
+  let simTime=0, stepIndex=0, angle=0, running=!reduced.matches, lastFrame=0, accumulator=0, raf=0, destroyed=false, visible=true;
+  let quality='standard', initialMotion='gentle', boundary='container',containerShape='cuboid',currentStrength=1;
+  const MAX_INKS=16, REFERENCE_COLUMN=.002, DEFAULT_COLOUR='#3657b2';
+  let inks=[{id:1,density:.04,colour:DEFAULT_COLOUR}], activeInkIndex=0, nextInkId=2, dropCentres=[];
   const palette={blue:[780,540,180],amber:[140,450,1100],red:[160,800,950],green:[700,200,600],violet:[460,950,240],black:[800,800,800]};
+  const normaliseHex=value=>/^#?[0-9a-f]{6}$/i.test(String(value).trim())?'#'+String(value).trim().replace(/^#/,'').toLowerCase():null;
+  const absorptionFor=colour=>colour===DEFAULT_COLOUR?[780,540,180]:[1,3,5].map(i=>-Math.log(Math.max(1/65535,parseInt(colour.slice(i,i+2),16)/255))/REFERENCE_COLUMN);
+  const hexForAbsorption=coefficients=>'#'+coefficients.map(value=>Math.round(255*Math.exp(-value*REFERENCE_COLUMN)).toString(16).padStart(2,'0')).join('');
+  const selectedInk=()=>inks[activeInkIndex];
+  const domainValue=()=>boundary==='periodic'?'periodic':containerShape;
+  function chooseDropCentres(){
+    if(inks.length===1)return [[.04,.08,.04]];
+    if(inks.length===2)return [[.028,.08,.04],[.052,.08,.04]];
+    // Nineteen sites fit all three containers without shrinking the drops.
+    // At Standard/Fine, their 18 mm separation also separates smoothed edges.
+    const sites=[];
+    for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++)for(let z=-1;z<=1;z++)if(x*x+y*y+z*z<=2)sites.push([.04+.018*x,.06+.018*y,.04+.018*z]);
+    return sites.map((position,index)=>({position,key:seedUnit(experimentSeed^Math.imul(index+1,0x9e3779b9))})).sort((a,b)=>a.key-b.key).slice(0,inks.length).map(site=>site.position);
+  }
   let manualSteps=0, playbackSpeed=1;
   function freshSeed(){return crypto.getRandomValues(new Uint32Array(1))[0];}
   function seedUnit(value){value=Math.imul(value^(value>>>16),0x7feb352d);value=Math.imul(value^(value>>>15),0x846ca68b);return ((value^(value>>>16))>>>0)/4294967296;}
@@ -166,15 +181,22 @@
         outColor=aggregate;
       }`);
     program('fluidVolume',`void main(){ivec3 q=cell();outColor=vec4(cellVolume(q),0,0,1);}`);
-    program('seed',`float drop(vec3 p){
+    program('seed',`uniform vec3 centre0,centre1,centre2,centre3;uniform vec4 activeSpecies;
+    float drop(vec3 p){
       // The seed selects the phases of a small initial shape perturbation.
       float r=.0065*(1.+.13*sin(atan(p.z,p.x)*5.+shapePhase.x)*sin(atan(length(p.xz),p.y)*3.+shapePhase.y));
       return 1.-smoothstep(r-.8*h,r+.8*h,length(p));
     }
     void main(){ivec3 q=cell();if(!fluidCell(q)){outColor=vec4(0);return;}
-      vec3 p=(vec3(q)-.5)*h-vec3(.04,.080,.04);
-      outColor=vec4(drop(p+vec3(dualInk==1?.012:0.,0,0)),dualInk==1?drop(p-vec3(.012,0,0)):0.,0,1);
+      vec3 p=(vec3(q)-.5)*h;
+      outColor=activeSpecies*vec4(drop(p-centre0),drop(p-centre1),drop(p-centre2),drop(p-centre3));
     }`);
+    program('sumBuoyancy',`uniform vec4 coefficients,meanValues;
+      void main(){ivec3 q=cell();if(q.z>=int(n.z)){outColor=vec4(0);return;}
+        vec4 concentration=concentrationAt(b,q);
+        if(boundaryMode==1)concentration-=meanValues;
+        outColor=vec4(at(a,q).r+dot(coefficients,concentration),0,0,1);
+      }`);
     program('seedAmbient',`uniform float currentAmplitude;
       void main(){ivec3 q=cell();if(q.z>=int(n.z)){outColor=vec4(0);return;}
         vec3 phase=((vec3(q)-.5)*h-vec3(.04,.080,.04))*314.159265+currentPhase;
@@ -196,9 +218,8 @@
       vec3 lap=velocityAt(a,q+ivec3(1,0,0))+velocityAt(a,q-ivec3(1,0,0))+velocityAt(a,q+ivec3(0,1,0))+velocityAt(a,q-ivec3(0,1,0))+velocityAt(a,q+ivec3(0,0,1))+velocityAt(a,q-ivec3(0,0,1))-6.*old;
       if(geometryMode>0){lap=vec3(0);for(int component=0;component<3;component++)for(int axis=0;axis<3;axis++)for(int direction=-1;direction<=1;direction+=2){ivec3 e=ivec3(0);e[axis]=direction;float neighbour=at(a,q+e)[component];if(faceWeight(q+e,component)==0.)neighbour=axis==component?0.:old[component];lap[component]+=neighbour-old[component];}}
       v+=dt*1e-6/(h*h)*lap;
-      vec2 concentration=.5*(concentrationAt(c,q)+concentrationAt(c,q+ivec3(0,1,0)));
-      vec2 contrast=concentration-(boundaryMode==1?vec2(meanConcentration,meanConcentration2):vec2(0));
-      v.y-=dt*9.81*(beta*contrast.x+beta2*contrast.y);
+      float contrast=.5*(at(c,scalarCell(q)).r+at(c,scalarCell(q+ivec3(0,1,0))).r);
+      v.y-=dt*9.81*contrast;
       outColor=vec4(wallVelocity(v,q),0);
     }`);
     program('divergence',`void main(){ivec3 q=cell();if(!fluidCell(q)){outColor=vec4(0);return;}vec3 v=at(a,q).xyz;
@@ -275,27 +296,27 @@ float scalarMCSlope(float leftDifference, float rightDifference) {
 }
 
 // Flux through the positive face of 'left', positive toward increasing axis.
-vec2 scalarFaceFlux(ivec3 left, int axis) {
+vec4 scalarFaceFlux(ivec3 left, int axis) {
   ivec3 offset = ivec3(0);
   offset[axis] = 1;
   // A periodic seam has one canonical face, so both cells use identical fluxes.
   if(boundaryMode==1)left=periodicCell(left);
-  else if(faceWeight(left,axis)==0.)return vec2(0.);
+  else if(faceWeight(left,axis)==0.)return vec4(0.);
   float speed = at(a, left)[axis];
   ivec3 donor = left;
   if (speed < 0.) donor += offset;
 
-  vec2 center = concentrationAt(b, donor);
-  vec2 lower = concentrationAt(b, donor - offset);
-  vec2 upper = concentrationAt(b, donor + offset);
+  vec4 center = concentrationAt(b, donor);
+  vec4 lower = concentrationAt(b, donor - offset);
+  vec4 upper = concentrationAt(b, donor + offset);
   if(geometryMode>0){if(!fluidCell(donor-offset))lower=center;if(!fluidCell(donor+offset))upper=center;}
-  vec2 slope = vec2(scalarMCSlope(center.x-lower.x,upper.x-center.x),scalarMCSlope(center.y-lower.y,upper.y-center.y));
-  vec2 faceConcentration = center + (speed < 0. ? -.5 : .5) * slope;
+  vec4 slope = vec4(scalarMCSlope(center.x-lower.x,upper.x-center.x),scalarMCSlope(center.y-lower.y,upper.y-center.y),scalarMCSlope(center.z-lower.z,upper.z-center.z),scalarMCSlope(center.w-lower.w,upper.w-center.w));
+  vec4 faceConcentration = center + (speed < 0. ? -.5 : .5) * slope;
 
   // These are cell averages on the two sides of this very same face.
-  vec2 leftConcentration = speed < 0. ? lower : center;
-  vec2 rightConcentration = speed < 0. ? center : upper;
-  vec2 diffusiveFlux = -scalarDiffusivity * (rightConcentration - leftConcentration) / h;
+  vec4 leftConcentration = speed < 0. ? lower : center;
+  vec4 rightConcentration = speed < 0. ? center : upper;
+  vec4 diffusiveFlux = -scalarDiffusivity * (rightConcentration - leftConcentration) / h;
   return speed * faceConcentration + diffusiveFlux;
 }
 
@@ -304,21 +325,21 @@ void main() {
   if (q.z>=int(n.z)) { outColor = vec4(0.); return; }
   q=scalarCell(q);
   if(!fluidCell(q)){outColor=vec4(0);return;}
-  vec2 xp = scalarFaceFlux(q, 0);
-  vec2 xm = scalarFaceFlux(q - ivec3(1,0,0), 0);
-  vec2 yp = scalarFaceFlux(q, 1);
-  vec2 ym = scalarFaceFlux(q - ivec3(0,1,0), 1);
-  vec2 zp = scalarFaceFlux(q, 2);
-  vec2 zm = scalarFaceFlux(q - ivec3(0,0,1), 2);
-  vec2 current = at(b, q).rg;
-  vec2 euler = current - (dt / h) * ((xp - xm) + (yp - ym) + (zp - zm));
-  vec2 result = euler;
-  if (rkStage == 1) result = .5 * at(c, q).rg + .5 * euler;
-  outColor = vec4(result, 0., 1.);
+  vec4 xp = scalarFaceFlux(q, 0);
+  vec4 xm = scalarFaceFlux(q - ivec3(1,0,0), 0);
+  vec4 yp = scalarFaceFlux(q, 1);
+  vec4 ym = scalarFaceFlux(q - ivec3(0,1,0), 1);
+  vec4 zp = scalarFaceFlux(q, 2);
+  vec4 zm = scalarFaceFlux(q - ivec3(0,0,1), 2);
+  vec4 current = at(b, q).rgba;
+  vec4 euler = current - (dt / h) * ((xp - xm) + (yp - ym) + (zp - zm));
+  vec4 result = euler;
+  if (rkStage == 1) result = .5 * at(c, q).rgba + .5 * euler;
+  outColor = result;
 }
 
 `);
-    program('render',`uniform vec2 resolution;uniform float angle,cameraCenter,cameraSpan;uniform vec3 paper,absorption,absorption2;
+    program('render',`uniform vec2 resolution;uniform float angle,cameraCenter,cameraSpan;uniform vec3 absorption0,absorption1,absorption2,absorption3;
       void main(){
         // Orthographic transmission image, with a slight elevation to reveal depth.
         float ca=cos(angle),sa=sin(angle);vec3 right=vec3(ca,0.,-sa),up=vec3(.12*sa,.9928,.12*ca),dir=normalize(cross(right,up));
@@ -326,33 +347,33 @@ void main() {
         vec3 ro=vec3(.04,cameraCenter,.04)+right*p.x+up*p.y+dir*.2;vec3 rd=-dir;
         vec3 low=(vec3(0)-ro)/rd,high=(vec3(.08,.12,.08)-ro)/rd;
         vec3 mn=min(low,high),mx=max(low,high);float nearT=max(max(mn.x,mn.y),mn.z),farT=min(min(mx.x,mx.y),mx.z);
-        vec2 optical=vec2(0.);
+        vec4 optical=vec4(0.);
         if(nearT<farT){
           float stepSize=.00042;float start=max(nearT,0.);
           // Fixed quadrature positions: no temporal noise or fabricated detail.
-          for(int i=0;i<300;i++){float t=start+(float(i)+.5)*stepSize;if(t>farT)break;vec3 pos=ro+rd*t;vec2 density=max(vec2(0.),interp(a,pos/h+.5).rg);optical+=density*stepSize;}
+          for(int i=0;i<300;i++){float t=start+(float(i)+.5)*stepSize;if(t>farT)break;vec3 pos=ro+rd*t;vec4 density=max(vec4(0.),interp(a,pos/h+.5));optical+=density*stepSize;}
         }
-        vec3 transmitted=paper*exp(-absorption*optical.x-absorption2*optical.y);
-        outColor=vec4(transmitted,1.);
+        vec3 previous=texture(b,uv).rgb;
+        outColor=vec4(previous+absorption0*optical.x+absorption1*optical.y+absorption2*optical.z+absorption3*optical.w,0.);
       }
     `);
-    program('seedParticles',`uniform float particleSide;
+    program('seedParticles',`uniform float particleSide;uniform int inkKey;uniform vec3 dropCentre;
       uint seedHash(uint x){x^=x>>16u;x*=0x7feb352du;x^=x>>15u;x*=0x846ca68bu;x^=x>>16u;return x;}
       float seedUnit(uint x){return (float(seedHash(x)>>8u)+.5)/16777216.;}
       void main(){ivec2 pixel=ivec2(gl_FragCoord.xy);int id=pixel.x+pixel.y*int(n.x);int side=int(particleSide);
-        int count=side*side*side;if(id>=count*(1+dualInk)){outColor=vec4(0);return;}
-        int localId=id%count;
+        int count=side*side*side;if(id>=count){outColor=vec4(0);return;}
+        int localId=id;uint sampleKey=uint(id)^uint(sceneSeed)^(uint(inkKey)*0x9e3779b9u);
         vec3 q=vec3(localId%side,(localId/side)%side,localId/(side*side));float spacing=.018/particleSide;
-        vec3 jitter=vec3(seedUnit(uint(id)^uint(sceneSeed)^0xa511e9b3u),seedUnit(uint(id)^uint(sceneSeed)^0x63d83595u),seedUnit(uint(id)^uint(sceneSeed)^0x9e3779b9u))-.5;
+        vec3 jitter=vec3(seedUnit(sampleKey^0xa511e9b3u),seedUnit(sampleKey^0x63d83595u),seedUnit(sampleKey^0x9e3779b9u))-.5;
         vec3 p=(q+.5+jitter*.7)*spacing-.009;
         float r=.0065*(1.+.13*sin(atan(p.z,p.x)*5.+shapePhase.x)*sin(atan(length(p.xz),p.y)*3.+shapePhase.y));
         float concentration=1.-smoothstep(r-.8*h,r+.8*h,length(p));
-        p+=vec3(.04+(dualInk==1?(id<count?-.012:.012):0.),.080,.04);
+        p+=dropCentre;
         if(geometryMode>0&&!physicalFluidCell(ivec3(floor(p/h))))concentration=0.;
         outColor=vec4(p,concentration*spacing*spacing*spacing);
       }
     `);
-    program('advectParticles',`uniform sampler2D ids;uniform int stepIndex;
+    program('advectParticles',`uniform sampler2D ids;uniform int stepIndex,inkKey;
       uint mixBits(uint x){x^=x>>16u;x*=0x7feb352du;x^=x>>15u;x*=0x846ca68bu;x^=x>>16u;return x;}
       float randomUnit(uint x){return (float(mixBits(x)>>8u)+.5)/16777216.;}
       vec3 reflectVoxelPath(vec3 start,vec3 displacement){
@@ -376,7 +397,7 @@ void main() {
         // Brownian displacement represents molecular diffusion, not a flow force.
         // Integer sample/step keys avoid the large-float sine hash's biased drift.
         // Original IDs survive compaction, so no dye-bearing sample is changed.
-        uint seed=uint(sceneSeed)^uint(texelFetch(ids,pixel,0).r)^(uint(stepIndex)*0x9e3779b9u);
+        uint seed=uint(sceneSeed)^uint(texelFetch(ids,pixel,0).r)^(uint(stepIndex)*0x9e3779b9u)^(uint(inkKey)*0x85ebca6bu);
         vec3 random=vec3(randomUnit(seed^0xa511e9b3u),randomUnit(seed^0x63d83595u),randomUnit(seed^0x9e3779b9u));
         vec3 random2=vec3(randomUnit(seed^0xb5297a4du),randomUnit(seed^0x68e31da4u),randomUnit(seed^0x1b56c4e9u));
         vec3 gaussian=sqrt(-2.*log(random))*cos(6.2831853*random2);
@@ -387,13 +408,13 @@ void main() {
       }
     `);
     const pointVertex=`#version 300 es
-      precision highp float;precision highp sampler2D;
-      uniform sampler2D a,b,ids;uniform float angle,cameraCenter,cameraSpan,interpolation,particleSide;uniform vec2 resolution;uniform highp int boundaryMode,dualInk;
-      uniform vec3 absorption,absorption2;
+      precision highp float;precision highp int;precision highp sampler2D;
+      uniform sampler2D a,b;uniform float angle,cameraCenter,cameraSpan,interpolation;uniform vec2 resolution;uniform highp int boundaryMode;
+      uniform vec3 absorption;
       out float opticalWeight;flat out vec3 opticalAbsorption;
       void main(){ivec2 size=textureSize(a,0);vec4 particle=texelFetch(a,ivec2(gl_VertexID%size.x,gl_VertexID/size.x),0);
         if(particle.w<=0.){gl_Position=vec4(3,3,3,1);gl_PointSize=1.;opticalWeight=0.;return;}
-        opticalAbsorption=dualInk==1?(texelFetch(ids,ivec2(gl_VertexID%size.x,gl_VertexID/size.x),0).r>=particleSide*particleSide*particleSide?absorption2:absorption):vec3(1,0,0);
+        opticalAbsorption=absorption;
         vec3 position=particle.xyz;
         if(interpolation<1.){vec4 previous=texelFetch(b,ivec2(gl_VertexID%size.x,gl_VertexID/size.x),0);if(previous.w>0.){
           vec3 displacement=particle.xyz-previous.xyz,box=vec3(.08,.12,.08);
@@ -411,18 +432,20 @@ void main() {
         opticalWeight=particle.w/(6.2831853*sigma*sigma*.9946076968);
       }`;
     program('renderParticles',`in float opticalWeight;flat in vec3 opticalAbsorption;void main(){vec2 p=(gl_PointCoord-.5)*6.;outColor=vec4(opticalAbsorption*(opticalWeight*exp(-.5*dot(p,p))),0);}`,common,pointVertex);
-    program('transmit',`uniform vec3 paper,absorption;void main(){vec3 optical=texture(a,uv).rgb;outColor=vec4(paper*exp(-(dualInk==1?optical:absorption*optical.r)),1.);}`);
+    program('transmit',`uniform vec3 paper;void main(){vec3 optical=texture(a,uv).rgb;outColor=vec4(paper*exp(-optical),1.);}`);
   } catch(error) {console.error(error);fail('The simulation could not initialise: '+error.message);return;}
   function clear(f){gl.bindFramebuffer(gl.FRAMEBUFFER,f.fb);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);}
   function allocate(mode){
     for(const f of fields){gl.deleteTexture(f.tex);gl.deleteFramebuffer(f.fb);}fields=[];levels=[];reductions=[];
+    invalidateRenderState();
     const debugN=Number(new URLSearchParams(location.search).get('grid'));
     const nx=debugN>=16&&debugN<=192&&debugN%8===0?debugN:mode==='fine'?160:112;
     DT=Math.min(.01,.10*(.08/nx)**2/1e-6);
     dims=grid(nx,nx*1.5,nx);h=dims.h;
-    velocity=pair(dims,4);forwardV=field(dims,4);dye=pair(dims,4);forwardC=field(dims,4);
-    opticalField=null;
-    particles=null;particleIds=null;particleCount=0;if(particleRendering)particleSide=mode==='fine'?160:128;
+    velocity=pair(dims,4);forwardV=field(dims,4);forwardC=field(dims,4);buoyancy=pair(dims);
+    scalarGroups=Array.from({length:Math.ceil(inks.length/4)},(_,index)=>({index,dye:pair(dims,4),means:[0,0,0,0],baseMasses:[0,0,0,0]}));
+    opticalField=null;opticalScratch=null;tracerSets=[];
+    if(particleRendering)particleSide=mode==='fine'?160:128;
     speed=field(dims);let rw=speed.width,rh=speed.height;
     while(rw>1||rh>1){rw=Math.ceil(rw/2);rh=Math.ceil(rh/2);reductions.push(field({n:[rw,rh,1],columns:1,h:1},4));}
     // Retain whole-cell coarsening in all three directions. Stopping after
@@ -479,34 +502,42 @@ void main() {
     }
   }
   function advance(){
+    clear(buoyancy[0]);
+    for(const group of scalarGroups){
+      const coefficients=Array.from({length:4},(_,channel)=>(inks[group.index*4+channel]?.density||0)/100);
+      draw('sumBuoyancy',buoyancy[1],{a:buoyancy[0],b:group.dye[0]},{coefficients,meanValues:group.means});buoyancy.swap();
+    }
     draw('advectV',forwardV,{a:velocity[0]});
-    draw('correctV',velocity[1],{a:velocity[0],b:forwardV,c:dye[0]});velocity.swap();
+    draw('correctV',velocity[1],{a:velocity[0],b:forwardV,c:buoyancy[0]});velocity.swap();
     projectVelocity();
     draw('speed',speed,{a:velocity[0]});let reducedSpeed=speed;
     for(const f of reductions){draw('reduce',f,{a:reducedSpeed});reducedSpeed=f;}
     gl.bindFramebuffer(gl.FRAMEBUFFER,reducedSpeed.fb);const rate=new Float32Array(4);gl.readPixels(0,0,1,1,gl.RGBA,gl.FLOAT,rate);
     const substeps=Math.max(1,Math.ceil(DT*rate[0]/h/.45));
-    for(let s=0;s<substeps;s++){
-      draw('transportC',forwardC,{a:velocity[0],b:dye[0],c:dye[0]},{rkStage:0,dt:DT/substeps});
-      draw('transportC',dye[1],{a:velocity[0],b:forwardC,c:dye[0]},{rkStage:1,dt:DT/substeps});dye.swap();
+    for(let s=0;s<substeps;s++)for(const group of scalarGroups){
+      draw('transportC',forwardC,{a:velocity[0],b:group.dye[0],c:group.dye[0]},{rkStage:0,dt:DT/substeps});
+      draw('transportC',group.dye[1],{a:velocity[0],b:forwardC,c:group.dye[0]},{rkStage:1,dt:DT/substeps});group.dye.swap();
     }
     simTime+=DT;stepIndex++;
-    if(particleRendering){draw('advectParticles',particles[1],{a:velocity[0],b:particles[0],ids:particleIds},{n:dims.n,columns:dims.columns,h,stepIndex});particles.swap();}
+    for(const set of tracerSets){draw('advectParticles',set.particles[1],{a:velocity[0],b:set.particles[0],ids:set.ids},{n:dims.n,columns:dims.columns,h,stepIndex,inkKey:set.id-1});set.particles.swap();}
   }
   function seedCompactParticles(){
-    if(particles)particles.forEach(discardField);discardField(particleIds);
+    for(const set of tracerSets){set.particles.forEach(discardField);discardField(set.ids);}tracerSets=[];
     // Seed with the original GPU quadrature, then retain every positive sample
     // unchanged. This one-time transfer removes only samples that contain no ink.
-    const candidates=field({n:[1024,Math.ceil(particleSide**3*(secondInk?2:1)/1024),1],columns:1,h},4);
-    draw('seedParticles',candidates,{},{particleSide,h});
-    const raw=read(candidates);particleCount=0;for(let i=3;i<raw.length;i+=4)if(raw[i]>0)particleCount++;
-    const g={n:[1024,Math.max(1,Math.ceil(particleCount/1024)),1],columns:1,h};
-    const packed=new Float32Array(g.n[0]*g.n[1]*4),ids=new Float32Array(g.n[0]*g.n[1]);
-    for(let i=0,j=0;i<raw.length;i+=4)if(raw[i+3]>0){const k=j*4;packed[k]=raw[i];packed[k+1]=raw[i+1];packed[k+2]=raw[i+2];packed[k+3]=raw[i+3];ids[j]=i/4;j++;}
-    discardField(candidates);particles=pair(g,4);particleIds=field(g);
-    gl.bindTexture(gl.TEXTURE_2D,particles[0].tex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,g.n[0],g.n[1],gl.RGBA,gl.FLOAT,packed);
-    gl.bindTexture(gl.TEXTURE_2D,particleIds.tex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,g.n[0],g.n[1],gl.RED,gl.FLOAT,ids);
-    renderState.activeUnit=-1;renderState.textures=[];
+    const candidates=field({n:[1024,Math.ceil(particleSide**3/1024),1],columns:1,h},4);
+    for(let index=0;index<inks.length;index++){
+      const ink=inks[index];draw('seedParticles',candidates,{},{particleSide,h,inkKey:ink.id-1,dropCentre:dropCentres[index]});
+      const raw=read(candidates);let count=0;for(let i=3;i<raw.length;i+=4)if(raw[i]>0)count++;
+      const g={n:[1024,Math.max(1,Math.ceil(count/1024)),1],columns:1,h};
+      const packed=new Float32Array(g.n[0]*g.n[1]*4),ids=new Float32Array(g.n[0]*g.n[1]);
+      for(let i=0,j=0;i<raw.length;i+=4)if(raw[i+3]>0){const k=j*4;packed[k]=raw[i];packed[k+1]=raw[i+1];packed[k+2]=raw[i+2];packed[k+3]=raw[i+3];ids[j]=i/4;j++;}
+      const set={id:ink.id,particles:pair(g,4),ids:field(g),count};
+      gl.bindTexture(gl.TEXTURE_2D,set.particles[0].tex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,g.n[0],g.n[1],gl.RGBA,gl.FLOAT,packed);
+      gl.bindTexture(gl.TEXTURE_2D,set.ids.tex);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,g.n[0],g.n[1],gl.RED,gl.FLOAT,ids);
+      renderState.activeUnit=-1;renderState.textures=[];tracerSets.push(set);
+    }
+    discardField(candidates);
   }
   function reset(){
     manualSteps=0;
@@ -518,11 +549,17 @@ void main() {
       else{draw('fluidVolume',level.res);level.g.fluidCount=readReduced(sumField(level.res));clear(level.res);}
     }
     dims.fluidCount=levels[0].g.fluidCount;
-    draw('seed',dye[0]);baseMass=0;
-    draw('activeValue',speed,{a:dye[0]},{channel:0});meanConcentration=readReduced(sumField(speed))/dims.fluidCount;
-    meanConcentration2=0;
-    if(secondInk){draw('activeValue',speed,{a:dye[0]},{channel:1});meanConcentration2=readReduced(sumField(speed))/dims.fluidCount;}
-    draw('scalarGhosts',dye[1],{a:dye[0]});dye.swap();
+    dropCentres=chooseDropCentres();
+    for(const group of scalarGroups){
+      const activeSpecies=Array.from({length:4},(_,channel)=>group.index*4+channel<inks.length?1:0),centres={};
+      for(let channel=0;channel<4;channel++)centres['centre'+channel]=dropCentres[group.index*4+channel]||[0,0,0];
+      draw('seed',group.dye[0],{},{...centres,activeSpecies});
+      for(let channel=0;channel<4;channel++){
+        draw('activeValue',speed,{a:group.dye[0]},{channel});const sum=readReduced(sumField(speed));
+        group.means[channel]=sum/dims.fluidCount;group.baseMasses[channel]=sum*h**3;
+      }
+      draw('scalarGhosts',group.dye[1],{a:group.dye[0]});group.dye.swap();
+    }
     draw('seedAmbient',velocity[0],{},{currentAmplitude:.004*currentStrength});
     // First impose the selected velocity boundary with zero pressure. In a
     // container this changes boundary fluxes, so a genuine initial projection follows.
@@ -536,15 +573,26 @@ void main() {
     if($('step'))$('step').disabled=running||manualSteps>0;
     const status=running?'Running':'Paused';
     if($('sim-status')&&$('sim-status').textContent!==status)$('sim-status').textContent=status;
-    if($('density-value'))$('density-value').textContent=density.toFixed(2)+'%';
-    if($('density-2-value'))$('density-2-value').textContent=density2.toFixed(2)+'%';
-    if($('second-ink-controls'))$('second-ink-controls').hidden=!secondInk;
+    const ink=selectedInk();
+    if($('density-value'))$('density-value').textContent=ink.density.toFixed(2)+'%';
+    if($('density'))$('density').value=ink.density;
+    if($('ink-colour'))$('ink-colour').value=ink.colour;
+    if($('ink-hex')&&document.activeElement!==$('ink-hex'))$('ink-hex').value=ink.colour;
+    const selector=$('ink-select');
+    if(selector){
+      if(selector.options.length!==inks.length||Array.from(selector.options).some((option,index)=>option.dataset.inkId!==String(inks[index]?.id))){
+        selector.replaceChildren(...inks.map((item,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent='Ink '+(index+1);option.dataset.inkId=String(item.id);return option;}));
+      }
+      selector.value=String(activeInkIndex);
+    }
+    if($('add-ink'))$('add-ink').disabled=inks.length>=MAX_INKS;
+    if($('remove-ink'))$('remove-ink').disabled=inks.length===1;
+    if($('domain'))$('domain').value=domainValue();
     if($('speed-value'))$('speed-value').textContent=Number(playbackSpeed.toFixed(2))+'×';
     if($('current-strength-value'))$('current-strength-value').textContent=Number(currentStrength.toFixed(2))+'×';
     $('speed')?.setAttribute('aria-valuetext',playbackSpeed+' times');
     $('current-strength')?.setAttribute('aria-valuetext',currentStrength===0?'Still water':currentStrength+' times initial current strength');
-    for(const [id,value] of [['density',density],['density-2',density2]])$(id)?.setAttribute('aria-valuetext',value===0?'Same density as water':Math.abs(value).toFixed(2)+' percent '+(value>0?'denser':'less dense')+' than water');
-    if($('container-shape-control'))$('container-shape-control').hidden=boundary==='periodic';
+    $('density')?.setAttribute('aria-valuetext',ink.density===0?'Same density as water':Math.abs(ink.density).toFixed(2)+' percent '+(ink.density>0?'denser':'less dense')+' than water');
     if($('angle-value'))$('angle-value').textContent=Math.round(angle*180/Math.PI)+'°';
   }
   function render(interpolation=1){
@@ -558,17 +606,25 @@ void main() {
     const spanY=shape==='sphere'?.088:.12*.9928+.12*(shape==='cuboid'?.08*Math.SQRT2:.08)+.008;
     cameraSpan=Math.max(spanY,spanX/(w/hh));
     window.updateInkBoundaryView?.({boundary,containerShape,shape:containerShape,angle,cameraCenter,cameraSpan,width:box.width,height:box.height});
-    const optical={resolution:[w,hh],angle,cameraCenter,cameraSpan,interpolation:Math.max(0,Math.min(1,interpolation)),paper:[.9804,.9765,.9647],absorption:palette[inkColour],absorption2:palette[inkColour2],particleSide};
+    const optical={resolution:[w,hh],angle,cameraCenter,cameraSpan,interpolation:Math.max(0,Math.min(1,interpolation)),paper:[.9804,.9765,.9647]};
+    if(!opticalField||opticalField.width!==w||opticalField.height!==hh){
+      discardField(opticalField);discardField(opticalScratch);opticalScratch=null;
+      const g={n:[w,hh,1],columns:1,h:1};opticalField=field(g,4);
+      if(!particleRendering)opticalScratch=field(g,4);
+    }
+    clear(opticalField);
     if(particleRendering){
-      if(!opticalField||opticalField.width!==w||opticalField.height!==hh||opticalField.channels!==(secondInk?4:1)){
-        if(opticalField){gl.deleteFramebuffer(opticalField.fb);gl.deleteTexture(opticalField.tex);fields.splice(fields.indexOf(opticalField),1);}
-        // One ink needs a scalar depth. Two inks accumulate three colour depths.
-        opticalField=field({n:[w,hh,1],columns:1,h:1},secondInk?4:1);
+      gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE);
+      for(let index=0;index<tracerSets.length;index++){
+        const set=tracerSets[index];draw('renderParticles',opticalField,{a:set.particles[0],b:set.particles[1]},{...optical,absorption:absorptionFor(inks[index].colour)},gl.POINTS,set.count);
       }
-      clear(opticalField);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE);
-      draw('renderParticles',opticalField,{a:particles[0],b:particles[1],ids:particleIds},optical,gl.POINTS,particleCount);gl.disable(gl.BLEND);
-      draw('transmit',null,{a:opticalField},optical);
-    }else draw('render',null,{a:dye[0]},optical);
+      gl.disable(gl.BLEND);
+    }else for(const group of scalarGroups){
+      const coefficients={};for(let channel=0;channel<4;channel++)coefficients['absorption'+channel]=inks[group.index*4+channel]?absorptionFor(inks[group.index*4+channel].colour):[0,0,0];
+      draw('render',opticalScratch,{a:group.dye[0],b:opticalField},{...optical,...coefficients,n:dims.n,columns:dims.columns,h});
+      [opticalField,opticalScratch]=[opticalScratch,opticalField];
+    }
+    draw('transmit',null,{a:opticalField},optical);
   }
   function frame(now){
     if(destroyed)return;raf=requestAnimationFrame(frame);
@@ -590,27 +646,58 @@ void main() {
     if(running)render(simTime>0?accumulator/DT:1);
   }
   function renderPlayback(){render(running&&simTime>0?accumulator/DT:1);}
-  function save(){
-    if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{modelVersion:4,densityContrastPercent:density,densityContrastPercent2:density2,secondInk,inkColour,inkColour2,viewAngleDegrees:Math.round(angle*180/Math.PI),quality,initialMotion,boundary,containerShape,currentStrength,seed:experimentSeed,playbackSpeed},privateContent:{running}}).catch(()=>{});
+  function settingsSnapshot(){
+    return {modelVersion:5,inks:inks.map(ink=>({...ink})),activeInkIndex,maxInks:MAX_INKS,domain:domainValue(),viewAngleDegrees:Math.round(angle*180/Math.PI),seed:experimentSeed,playbackSpeed,boundary,containerShape,currentStrength,initialMotion,quality,dt:DT,secondInk:inks.length>1,density:inks[0].density,density2:inks[1]?.density||0};
   }
-  function restore(snapshot){const s=snapshot?.modelContent;if(!s||![3,4].includes(s.modelVersion))return;
-    if(Number.isFinite(s.densityContrastPercent)){density=Math.max(-.4,Math.min(1.2,s.densityContrastPercent));if($('density'))$('density').value=density;}
-    if(Number.isFinite(s.viewAngleDegrees)){angle=Math.max(-90,Math.min(90,s.viewAngleDegrees))*Math.PI/180;if($('angle'))$('angle').value=s.viewAngleDegrees;}
-    let restart=false;
-    if(typeof s.secondInk==='boolean'&&s.secondInk!==secondInk){secondInk=s.secondInk;restart=true;if($('second-ink'))$('second-ink').checked=secondInk;}
-    if(Number.isFinite(s.densityContrastPercent2)){density2=Math.max(-.4,Math.min(1.2,s.densityContrastPercent2));if($('density-2'))$('density-2').value=density2;}
-    if(Object.hasOwn(palette,s.inkColour)){inkColour=s.inkColour;if($('ink-colour'))$('ink-colour').value=inkColour;}
-    if(Object.hasOwn(palette,s.inkColour2)){inkColour2=s.inkColour2;if($('ink-colour-2'))$('ink-colour-2').value=inkColour2;}
+  function save(){
+    if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:settingsSnapshot(),privateContent:{running}}).catch(()=>{});
+  }
+  function clearColourError(){const input=$('ink-hex');if(input){input.setCustomValidity('');input.removeAttribute('aria-invalid');input.value=selectedInk().colour;}}
+  function setColour(value){
+    const colour=normaliseHex(value);if(!colour)return false;
+    selectedInk().colour=colour;clearColourError();updateUI();renderPlayback();save();return true;
+  }
+  function setDomain(value){boundary=value==='periodic'?'periodic':'container';if(['cuboid','cylinder','sphere'].includes(value))containerShape=value;}
+  function replaceInks(next,index=0){
+    const previous=inks,previousIndex=activeInkIndex;inks=next;activeInkIndex=Math.max(0,Math.min(index,inks.length-1));
+    try{allocate(quality);clearColourError();if($('sim-error'))$('sim-error').hidden=true;return true;}
+    catch(error){
+      console.error(error);inks=previous;activeInkIndex=previousIndex;
+      try{allocate(quality);if($('sim-error')){$('sim-error').hidden=false;$('sim-error').textContent='This graphics device could not allocate that many inks at this resolution. The previous setup has been restored.';}}
+      catch(recoveryError){console.error(recoveryError);fail('The graphics device ran out of resources. Reload the page to restart.');}
+      return false;
+    }
+  }
+  function restore(snapshot){const s=snapshot?.modelContent;if(!s||![3,4,5].includes(s.modelVersion))return;
+    let restart=false,reallocate=false;
+    let incoming;
+    if(s.modelVersion===5&&Array.isArray(s.inks)&&s.inks.length){
+      const used=new Set();let candidate=1;
+      incoming=s.inks.slice(0,MAX_INKS).map(value=>{
+        const record=value&&typeof value==='object'?value:{};
+        let id=record.id;if(!Number.isInteger(id)||id<1||id>2147483646||used.has(id)){while(used.has(candidate))candidate++;id=candidate++;}used.add(id);
+        return{id,density:Number.isFinite(record.density)?Math.max(-.4,Math.min(1.2,record.density)):.04,colour:normaliseHex(record.colour)||DEFAULT_COLOUR};
+      });
+    }else if(s.modelVersion<5){
+      const legacy=(id,density,colour,fallback)=>({id,density:Number.isFinite(density)?Math.max(-.4,Math.min(1.2,density)):fallback,colour:Object.hasOwn(palette,colour)?hexForAbsorption(palette[colour]):id===1?DEFAULT_COLOUR:hexForAbsorption(palette.amber)});
+      incoming=[legacy(1,s.densityContrastPercent,s.inkColour,.04)];
+      if(s.secondInk)incoming.push(legacy(2,s.densityContrastPercent2,s.inkColour2,.08));
+    }
+    if(incoming){reallocate=incoming.length!==inks.length||incoming.some((ink,index)=>ink.id!==inks[index]?.id);inks=incoming;nextInkId=Math.max(...inks.map(ink=>ink.id))+1;}
+    if(Number.isInteger(s.activeInkIndex))activeInkIndex=Math.max(0,Math.min(inks.length-1,s.activeInkIndex));else activeInkIndex=Math.min(activeInkIndex,inks.length-1);
+    if(Number.isFinite(s.viewAngleDegrees)){angle=Math.max(-180,Math.min(180,s.viewAngleDegrees))*Math.PI/180;if($('angle'))$('angle').value=s.viewAngleDegrees;}
     if(Number.isInteger(s.seed)&&s.seed>=0&&s.seed<=4294967295&&s.seed!==experimentSeed){chooseSeed(s.seed);restart=true;}
     if(Number.isFinite(s.playbackSpeed)){playbackSpeed=Math.max(.25,Math.min(6,s.playbackSpeed));if($('speed'))$('speed').value=playbackSpeed;}
-    if(['container','periodic'].includes(s.boundary)&&s.boundary!==boundary){boundary=s.boundary;restart=true;if($('boundary'))$('boundary').value=boundary;}
-    if(['cuboid','cylinder','sphere'].includes(s.containerShape)&&s.containerShape!==containerShape){containerShape=s.containerShape;restart=true;if($('container-shape'))$('container-shape').value=containerShape;}
-    const restoredCurrent=Number.isFinite(s.currentStrength)?Math.max(0,Math.min(3,s.currentStrength)):s.initialMotion==='still'?0:1;
-    if(restoredCurrent!==currentStrength){currentStrength=restoredCurrent;initialMotion=currentStrength>0?'gentle':'still';restart=true;if($('current-strength'))$('current-strength').value=currentStrength;}
-    if(['standard','fine'].includes(s.quality)&&s.quality!==quality){quality=s.quality;allocate(quality);restart=false;if($('quality'))$('quality').value=quality;}
-    if(restart)reset();
+    const requestedDomain=['cuboid','cylinder','sphere','periodic'].includes(s.domain)?s.domain:s.boundary==='periodic'?'periodic':['cuboid','cylinder','sphere'].includes(s.containerShape)?s.containerShape:null;
+    if(requestedDomain&&requestedDomain!==domainValue()){setDomain(requestedDomain);restart=true;}
+    if(Number.isFinite(s.currentStrength)||s.initialMotion){
+      const restoredCurrent=Number.isFinite(s.currentStrength)?Math.max(0,Math.min(3,s.currentStrength)):s.initialMotion==='still'?0:1;
+      if(restoredCurrent!==currentStrength){currentStrength=restoredCurrent;initialMotion=currentStrength>0?'gentle':'still';restart=true;if($('current-strength'))$('current-strength').value=currentStrength;}
+    }
+    if(['standard','fine'].includes(s.quality)&&s.quality!==quality){quality=s.quality;reallocate=true;if($('quality'))$('quality').value=quality;}
+    if(reallocate)allocate(quality);else if(restart)reset();
     if(typeof snapshot.privateContent?.running==='boolean'){const resume=snapshot.privateContent.running&&!reduced.matches;if(resume&&!running)accumulator=DT;running=resume;}
-    updateUI();renderPlayback();
+    clearColourError();updateUI();renderPlayback();
   }
   try {
     allocate(quality);restore(window.openai?.widgetState);
@@ -626,18 +713,26 @@ void main() {
       else e.target.value=String(experimentSeed);
     });
     $('random-seed')?.addEventListener('click',()=>{let value=freshSeed();while(value===experimentSeed)value=freshSeed();chooseSeed(value);reset();save();});
-    $('density')?.addEventListener('input',e=>{density=Number(e.target.value);updateUI();save();});
-    $('density-2')?.addEventListener('input',e=>{density2=Number(e.target.value);updateUI();save();});
-    $('ink-colour')?.addEventListener('change',e=>{inkColour=e.target.value;renderPlayback();save();});
-    $('ink-colour-2')?.addEventListener('change',e=>{inkColour2=e.target.value;renderPlayback();save();});
-    $('second-ink')?.addEventListener('change',e=>{secondInk=e.target.checked;reset();save();});
+    $('density')?.addEventListener('input',e=>{selectedInk().density=Math.max(-.4,Math.min(1.2,Number(e.target.value)));updateUI();save();});
+    $('ink-select')?.addEventListener('change',e=>{activeInkIndex=Math.max(0,Math.min(inks.length-1,Number(e.target.value)));clearColourError();updateUI();save();});
+    $('add-ink')?.addEventListener('click',()=>{
+      if(inks.length>=MAX_INKS)return;
+      const colours=['#c18c2f','#4c9b73','#aa4267','#8061bf','#397d9c'];
+      const ink={id:nextInkId++,density:.04,colour:colours[(inks.length-1)%colours.length]};
+      if(replaceInks([...inks,ink],inks.length))save();
+    });
+    $('remove-ink')?.addEventListener('click',()=>{if(inks.length>1&&replaceInks(inks.filter((_,index)=>index!==activeInkIndex),Math.min(activeInkIndex,inks.length-2)))save();});
+    $('ink-colour')?.addEventListener('input',e=>setColour(e.target.value));
+    $('ink-hex')?.addEventListener('input',e=>{if(normaliseHex(e.target.value)){e.target.setCustomValidity('');e.target.removeAttribute('aria-invalid');}});
+    $('ink-hex')?.addEventListener('change',e=>{if(!setColour(e.target.value)){e.target.setCustomValidity('Enter a six-digit hexadecimal colour, for example #3657b2.');e.target.setAttribute('aria-invalid','true');e.target.reportValidity();}});
+    $('ink-hex')?.addEventListener('blur',e=>{if(!normaliseHex(e.target.value))clearColourError();});
+    $('ink-hex')?.addEventListener('keydown',e=>{if(e.key==='Escape'){clearColourError();e.preventDefault();}else if(e.key==='Enter'){e.preventDefault();e.target.dispatchEvent(new Event('change'));}});
     $('angle')?.addEventListener('input',e=>{angle=Number(e.target.value)*Math.PI/180;renderPlayback();updateUI();save();});
-    $('quality')?.addEventListener('change',e=>{quality=e.target.value;allocate(quality);save();});
+    $('quality')?.addEventListener('change',e=>{const previous=quality;quality=e.target.value;try{allocate(quality);if($('sim-error'))$('sim-error').hidden=true;save();}catch(error){quality=previous;e.target.value=quality;try{allocate(quality);if($('sim-error')){$('sim-error').hidden=false;$('sim-error').textContent='This graphics device could not allocate Fine resolution with the selected inks. The previous resolution has been restored.';}}catch(recoveryError){fail('The graphics device ran out of resources. Reload the page to restart.');}}});
     $('initial-motion')?.addEventListener('change',e=>{initialMotion=e.target.value;currentStrength=initialMotion==='still'?0:1;reset();save();});
     $('current-strength')?.addEventListener('input',e=>{currentStrength=Math.max(0,Math.min(3,Number(e.target.value)));initialMotion=currentStrength>0?'gentle':'still';updateUI();});
     $('current-strength')?.addEventListener('change',()=>{reset();save();});
-    $('container-shape')?.addEventListener('change',e=>{containerShape=['cylinder','sphere'].includes(e.target.value)?e.target.value:'cuboid';reset();save();});
-    $('boundary')?.addEventListener('change',e=>{boundary=e.target.value==='periodic'?'periodic':'container';reset();save();});
+    $('domain')?.addEventListener('change',e=>{setDomain(e.target.value);reset();save();});
     reduced.addEventListener('change',e=>{if(e.matches){running=false;manualSteps=0;updateUI();render();}});
     window.addEventListener('openai:set_globals',e=>restore(e.detail?.globals?.widgetState));
     new ResizeObserver(()=>renderPlayback()).observe(canvas);
@@ -652,24 +747,42 @@ void main() {
     invalidateRenderState,
     pause(){running=false;manualSteps=0;updateUI();render();},play(){if(!running)accumulator=DT;running=true;updateUI();renderPlayback();},
     step(count=1){for(let i=0;i<count;i++)advance();render();updateUI();},reset,
-    get settings(){return{seed:experimentSeed,playbackSpeed,boundary,containerShape,currentStrength,initialMotion,quality,dt:DT,secondInk,inkColour,inkColour2,density,density2};},
+    restoreSettings(settings){restore({modelContent:{modelVersion:5,...settings}});return settingsSnapshot();},
+    get settings(){return settingsSnapshot();},
     get time(){return simTime;},get grid(){return dims.active.slice();},
-    get configuration(){return{boundary,containerShape,currentStrength,initialMotion,meanConcentration,meanConcentration2,fluidCells:dims.fluidCount};},
+    get configuration(){return{boundary,containerShape,currentStrength,initialMotion,meanConcentration:scalarGroups[0].means[0],meanConcentration2:scalarGroups[0].means[1],perInk:inks.map((ink,index)=>({id:ink.id,meanConcentration:scalarGroups[Math.floor(index/4)].means[index%4],centre:dropCentres[index].slice(),absorption:absorptionFor(ink.colour)})),fluidCells:dims.fluidCount};},
     get camera(){return {center:cameraCenter,span:cameraSpan};},
     tracerDiagnostics(){
-      if(!particleRendering)return{available:false};const raw=read(particles[0]);let amount=0,count=0,escaped=0,escapedAmount=0,outsideActive=0,finite=true;
-      for(let i=0;i<raw.length;i+=4){const w=raw[i+3];if(w===0)continue;finite&&=Number.isFinite(w)&&Number.isFinite(raw[i])&&Number.isFinite(raw[i+1])&&Number.isFinite(raw[i+2]);if(w<0){escaped++;escapedAmount-=w;continue;}amount+=w;count++;if(raw[i]<0||raw[i]>.080001||raw[i+1]<0||raw[i+1]>.120001||raw[i+2]<0||raw[i+2]>.080001)outsideActive++;}
-      render();return{available:true,amount,count,escaped,escapedAmount,totalAmount:amount+escapedAmount,outsideActive,finite};
+      if(!particleRendering)return{available:false,perInk:[]};
+      const perInk=tracerSets.map(set=>{
+        const raw=read(set.particles[0]);let amount=0,count=0,escaped=0,escapedAmount=0,outsideActive=0,finite=true;
+        for(let i=0;i<raw.length;i+=4){const w=raw[i+3];if(w===0)continue;finite&&=Number.isFinite(w)&&Number.isFinite(raw[i])&&Number.isFinite(raw[i+1])&&Number.isFinite(raw[i+2]);if(w<0){escaped++;escapedAmount-=w;continue;}amount+=w;count++;if(raw[i]<0||raw[i]>.080001||raw[i+1]<0||raw[i+1]>.120001||raw[i+2]<0||raw[i+2]>.080001)outsideActive++;}
+        return{id:set.id,amount,count,escaped,escapedAmount,totalAmount:amount+escapedAmount,outsideActive,finite};
+      });
+      const result={available:true,amount:0,count:0,escaped:0,escapedAmount:0,totalAmount:0,outsideActive:0,finite:true,perInk};
+      for(const item of perInk){for(const key of ['amount','count','escaped','escapedAmount','totalAmount','outsideActive'])result[key]+=item[key];result.finite&&=item.finite;}
+      render();return result;
     },
     diagnostics(){
-      const d=values(dye[0]);let mass=0,min=Infinity,max=-Infinity,finite=true;for(const v of d){mass+=v;min=Math.min(min,v);max=Math.max(max,v);finite&&=Number.isFinite(v);}
-      mass*=h**3;
+      const perInk=inks.map((ink,index)=>({id:ink.id,index,mass:0,min:Infinity,max:-Infinity,finite:true,relativeMass:1}));
+      const [nx,ny,nz]=dims.n;
+      for(const group of scalarGroups){
+        const raw=read(group.dye[0]),f=group.dye[0];
+        for(let z=1;z<nz-1;z++)for(let y=1;y<ny-1;y++)for(let x=1;x<nx-1;x++){
+          const offset=((Math.floor(z/dims.columns)*ny+y)*f.width+(z%dims.columns)*nx+x)*4;
+          for(let channel=0;channel<4;channel++){
+            const item=perInk[group.index*4+channel];if(!item)break;
+            const value=raw[offset+channel];item.mass+=value;item.min=Math.min(item.min,value);item.max=Math.max(item.max,value);item.finite&&=Number.isFinite(value);
+          }
+        }
+        for(let channel=0;channel<4;channel++){const item=perInk[group.index*4+channel];if(!item)break;item.mass*=h**3;item.relativeMass=group.baseMasses[channel]>0?item.mass/group.baseMasses[channel]:1;}
+      }
+      const mass=perInk.reduce((sum,item)=>sum+item.mass,0),baseMass=scalarGroups.reduce((sum,group)=>sum+group.baseMasses.reduce((a,b)=>a+b,0),0);
+      let min=Math.min(...perInk.map(item=>item.min)),max=Math.max(...perInk.map(item=>item.max)),finite=perInk.every(item=>item.finite);
       draw('divergence',levels[0].res,{a:velocity[0]});const after=values(levels[0].res),before=values(levels[0].rhs);
       const rms=v=>Math.sqrt(v.reduce((sum,x)=>sum+x*x,0)/v.length);
       const v=read(velocity[0]);let maxSpeed=0;for(let i=0;i<v.length;i+=4){maxSpeed=Math.max(maxSpeed,Math.hypot(v[i],v[i+1],v[i+2]));finite&&=Number.isFinite(v[i]+v[i+1]+v[i+2]);}
-      const mass2=values(dye[0],1).reduce((sum,v)=>sum+v,0)*h**3,escapedMass=0;
-      if(!baseMass)baseMass=mass+escapedMass;
-      const result={time:simTime,grid:dims.active,min,max,mass,mass2,escapedMass,relativeMass:mass/baseMass,massBalance:(mass+escapedMass)/baseMass,finite,maxSpeed,divergenceBefore:rms(before),divergenceAfter:rms(after),glError:gl.getError()};render();return result;
+      const result={time:simTime,grid:dims.active,min,max,mass,mass1:perInk[0].mass,mass2:perInk[1]?.mass||0,escapedMass:0,relativeMass:baseMass>0?mass/baseMass:1,massBalance:baseMass>0?mass/baseMass:1,finite,maxSpeed,divergenceBefore:rms(before),divergenceAfter:rms(after),perInk,glError:gl.getError()};render();return result;
     }
   };
 })();

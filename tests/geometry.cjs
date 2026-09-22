@@ -2,7 +2,7 @@
 // projection, conservative scalar flux, and reflected tracer trajectories.
 const fs=require('node:fs');const assert=require('node:assert/strict');const{chromium}=require('playwright');
 const source=fs.readFileSync(process.env.INK_SOURCE||'ink.js','utf8');
-const hook=String.raw`qaGeometry(shape,mode='container',strength=1){running=false;containerShape=shape;boundary=mode;currentStrength=strength;initialMotion=strength?'gentle':'still';density=1.2;chooseSeed(125);reset();},
+const hook=String.raw`qaGeometry(shape,mode='container',strength=1){running=false;containerShape=shape;boundary=mode;currentStrength=strength;initialMotion=strength?'gentle':'still';inks=[{id:1,density:1.2,colour:DEFAULT_COLOUR}];activeInkIndex=0;nextInkId=2;chooseSeed(125);if(scalarGroups.length!==1)allocate(quality);else reset();},
 qaGeometryGradient(){
  levels.forEach(l=>{l.p.forEach(clear);clear(l.rhs);clear(l.res);});
  if(!programs.qaGeometryGradient)program('qaGeometryGradient',\`float phi(ivec3 q){vec3 p=(vec3(q)-.5)*h;return .000003*cos(31.*p.x)*sin(41.*p.y)*cos(29.*p.z);}
@@ -10,17 +10,17 @@ qaGeometryGradient(){
  draw('qaGeometryGradient',velocity[0]);projectVelocity(true);render();
 },
 qaGeometryStats(){
- const mask=read(levels[0].geometry),v=read(velocity[0]),c=read(dye[0]),N=dims.active,[nx,ny]=dims.n,columns=dims.columns,width=velocity[0].width;
+ const mask=read(levels[0].geometry),v=read(velocity[0]),concentrations=scalarGroups.map(group=>read(group.dye[0])),N=dims.active,[nx,ny]=dims.n,columns=dims.columns,width=velocity[0].width;
  const offset=q=>((Math.floor(q[2]/columns)*ny+q[1])*width+(q[2]%columns)*nx+q[0])*4;
  const inside=q=>q.every((x,j)=>x>=1&&x<=N[j]);
  const fluid=q=>inside(q)&&mask[offset(q)+3]>.5;
  let wallFlux=0,solidDye=0,fluidCells=0,maximumFluidSpeed=0,blockedFaces=0;
  for(let z=0;z<=N[2];z++)for(let y=0;y<=N[1];y++)for(let x=0;x<=N[0];x++){
-  const q=[x,y,z],i=offset(q),wet=fluid(q);if(wet)fluidCells++;else if(inside(q))solidDye=Math.max(solidDye,Math.abs(c[i]));
+  const q=[x,y,z],i=offset(q),wet=fluid(q);if(wet)fluidCells++;else if(inside(q))for(let species=0;species<inks.length;species++)solidDye=Math.max(solidDye,Math.abs(concentrations[Math.floor(species/4)][i+species%4]));
   for(let axis=0;axis<3;axis++){const next=q.slice();next[axis]++;const neighbour=fluid(next);if(wet!==neighbour){blockedFaces++;wallFlux=Math.max(wallFlux,Math.abs(v[i+axis]));}if(wet&&neighbour)maximumFluidSpeed=Math.max(maximumFluidSpeed,Math.abs(v[i+axis]));}
  }
  let outsideVoxels=0,outsideAnalytic=0,tracers=0,tracerMass=0,outsideExamples=[];
- if(particleRendering){const p=read(particles[0]);for(let i=0;i<p.length;i+=4)if(p[i+3]>0){tracers++;tracerMass+=p[i+3];const q=[0,1,2].map(j=>Math.floor(p[i+j]/h)+1);if(!fluid(q)){outsideVoxels++;if(outsideExamples.length<8)outsideExamples.push({q,p:Array.from(p.slice(i,i+3)),weight:p[i+3]});}
+ if(particleRendering)for(const set of tracerSets){const p=read(set.particles[0]);for(let i=0;i<p.length;i+=4)if(p[i+3]>0){tracers++;tracerMass+=p[i+3];const q=[0,1,2].map(j=>Math.floor(p[i+j]/h)+1);if(!fluid(q)){outsideVoxels++;if(outsideExamples.length<8)outsideExamples.push({inkId:set.id,q,p:Array.from(p.slice(i,i+3)),weight:p[i+3]});}
   const dx=p[i]-.04,dy=p[i+1]-.06,dz=p[i+2]-.04;if(containerShape==='sphere'?dx*dx+dy*dy+dz*dz>.001600001:containerShape==='cylinder'?dx*dx+dz*dz>.001600001||Math.abs(dy)>.060001:p[i]<0||p[i]>.080001||p[i+1]<0||p[i+1]>.120001||p[i+2]<0||p[i+2]>.080001)outsideAnalytic++;
  }}
  render();return{wallFlux,solidDye,fluidCells,blockedFaces,maximumFluidSpeed,outsideVoxels,outsideAnalytic,outsideExamples,tracers,tracerMass,hierarchy:levels.map(l=>({grid:l.g.active,fluidVolume:l.g.fluidCount}))};
