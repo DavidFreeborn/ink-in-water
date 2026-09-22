@@ -35,9 +35,19 @@
   uniform highp int boundaryMode, geometryMode, sceneSeed;
   uniform float fluidCount;
   uniform vec2 shapePhase;
+  uniform vec4 shapeOrientation;
   uniform vec3 currentPhase;
   uniform sampler2D a,b,c,geometry;
   const vec3 X=vec3(1,0,0), Y=vec3(0,1,0), Z=vec3(0,0,1);
+  // One concentration law seeds both the Eulerian field and optical quadrature.
+  // Only the initial shape changes between inks; the subsequent flow is shared.
+  float initialDrop(vec3 p,vec2 phases,vec4 orientation){
+    vec3 direction=p;
+    // Preserve the original first ink without introducing rotation roundoff.
+    if(any(notEqual(orientation.xyz,vec3(0.))))direction+=2.*cross(orientation.xyz,cross(orientation.xyz,p)+orientation.w*p);
+    float r=.0065*(1.+.13*sin(atan(direction.z,direction.x)*5.+phases.x)*sin(atan(length(direction.xz),direction.y)*3.+phases.y));
+    return 1.-smoothstep(r-.8*h,r+.8*h,length(p));
+  }
   // Pixel centres are half an integer from tile edges, so positive float
   // division finds the exact tile without expensive per-fragment integer division.
   ivec3 cell(){ivec2 f=ivec2(gl_FragCoord.xy),tile=ivec2(gl_FragCoord.xy/n.xy);return ivec3(f-tile*ivec2(n.xy),tile.x+tile.y*int(columns));}
@@ -139,7 +149,7 @@
   let DT=.01;
   let simTime=0, stepIndex=0, angle=0, running=!reduced.matches, lastFrame=0, accumulator=0, raf=0, destroyed=false, visible=true;
   let quality='standard', initialMotion='gentle', boundary='container',containerShape='cuboid',currentStrength=1;
-  const MAX_INKS=16, REFERENCE_COLUMN=.002, DEFAULT_COLOUR='#3657b2';
+  const MAX_INKS=3, REFERENCE_COLUMN=.002, DEFAULT_COLOUR='#3657b2';
   let inks=[{id:1,density:.04,colour:DEFAULT_COLOUR}], activeInkIndex=0, nextInkId=2, dropCentres=[];
   const palette={blue:[780,540,180],amber:[140,450,1100],red:[160,800,950],green:[700,200,600],violet:[460,950,240],black:[800,800,800]};
   const normaliseHex=value=>/^#?[0-9a-f]{6}$/i.test(String(value).trim())?'#'+String(value).trim().replace(/^#/,'').toLowerCase():null;
@@ -166,6 +176,18 @@
     currentPhase=[0xb5297a4d,0x68e31da4,0x1b56c4e9].map(salt=>2*Math.PI*seedUnit(experimentSeed^salt));
     if($('seed'))$('seed').value=String(experimentSeed);
   }
+  function initialShapeForInk(id){
+    if(id===1)return{phases:shapePhase.slice(),orientation:[0,0,0,1]};
+    // Stable identities keep their perturbation when another ink is removed.
+    // ID 1 retains the original shape; all other keys select independent phases
+    // and a uniform spatial orientation, with the same radius and amplitude.
+    // This shape namespace is separate from current and tracer random keys.
+    const key=experimentSeed^Math.imul(id-1,0xd1b54a35)^0x94d049bb;
+    const phases=[0xa511e9b3,0x63d83595].map(salt=>2*Math.PI*seedUnit(key^salt));
+    const u=[0x243f6a88,0x85a308d3,0x13198a2e].map(salt=>seedUnit(key^salt));
+    const lower=Math.sqrt(1-u[0]),upper=Math.sqrt(u[0]),azimuth=2*Math.PI*u[1],polar=2*Math.PI*u[2];
+    return{phases,orientation:[lower*Math.sin(azimuth),lower*Math.cos(azimuth),upper*Math.sin(polar),upper*Math.cos(polar)]};
+  }
   chooseSeed(experimentSeed);
   const cameraCenter=.06;
   let cameraSpan=.14;
@@ -182,14 +204,11 @@
       }`);
     program('fluidVolume',`void main(){ivec3 q=cell();outColor=vec4(cellVolume(q),0,0,1);}`);
     program('seed',`uniform vec3 centre0,centre1,centre2,centre3;uniform vec4 activeSpecies;
-    float drop(vec3 p){
-      // The seed selects the phases of a small initial shape perturbation.
-      float r=.0065*(1.+.13*sin(atan(p.z,p.x)*5.+shapePhase.x)*sin(atan(length(p.xz),p.y)*3.+shapePhase.y));
-      return 1.-smoothstep(r-.8*h,r+.8*h,length(p));
-    }
+    uniform vec2 phases0,phases1,phases2,phases3;
+    uniform vec4 orientation0,orientation1,orientation2,orientation3;
     void main(){ivec3 q=cell();if(!fluidCell(q)){outColor=vec4(0);return;}
       vec3 p=(vec3(q)-.5)*h;
-      outColor=activeSpecies*vec4(drop(p-centre0),drop(p-centre1),drop(p-centre2),drop(p-centre3));
+      outColor=activeSpecies*vec4(initialDrop(p-centre0,phases0,orientation0),initialDrop(p-centre1,phases1,orientation1),initialDrop(p-centre2,phases2,orientation2),initialDrop(p-centre3,phases3,orientation3));
     }`);
     program('sumBuoyancy',`uniform vec4 coefficients,meanValues;
       void main(){ivec3 q=cell();if(q.z>=int(n.z)){outColor=vec4(0);return;}
@@ -366,8 +385,7 @@ void main() {
         vec3 q=vec3(localId%side,(localId/side)%side,localId/(side*side));float spacing=.018/particleSide;
         vec3 jitter=vec3(seedUnit(sampleKey^0xa511e9b3u),seedUnit(sampleKey^0x63d83595u),seedUnit(sampleKey^0x9e3779b9u))-.5;
         vec3 p=(q+.5+jitter*.7)*spacing-.009;
-        float r=.0065*(1.+.13*sin(atan(p.z,p.x)*5.+shapePhase.x)*sin(atan(length(p.xz),p.y)*3.+shapePhase.y));
-        float concentration=1.-smoothstep(r-.8*h,r+.8*h,length(p));
+        float concentration=initialDrop(p,shapePhase,shapeOrientation);
         p+=dropCentre;
         if(geometryMode>0&&!physicalFluidCell(ivec3(floor(p/h))))concentration=0.;
         outColor=vec4(p,concentration*spacing*spacing*spacing);
@@ -527,7 +545,8 @@ void main() {
     // unchanged. This one-time transfer removes only samples that contain no ink.
     const candidates=field({n:[1024,Math.ceil(particleSide**3/1024),1],columns:1,h},4);
     for(let index=0;index<inks.length;index++){
-      const ink=inks[index];draw('seedParticles',candidates,{},{particleSide,h,inkKey:ink.id-1,dropCentre:dropCentres[index]});
+      const ink=inks[index],initialShape=initialShapeForInk(ink.id);
+      draw('seedParticles',candidates,{},{particleSide,h,inkKey:ink.id-1,dropCentre:dropCentres[index],shapePhase:initialShape.phases,shapeOrientation:initialShape.orientation});
       const raw=read(candidates);let count=0;for(let i=3;i<raw.length;i+=4)if(raw[i]>0)count++;
       const g={n:[1024,Math.max(1,Math.ceil(count/1024)),1],columns:1,h};
       const packed=new Float32Array(g.n[0]*g.n[1]*4),ids=new Float32Array(g.n[0]*g.n[1]);
@@ -552,7 +571,11 @@ void main() {
     dropCentres=chooseDropCentres();
     for(const group of scalarGroups){
       const activeSpecies=Array.from({length:4},(_,channel)=>group.index*4+channel<inks.length?1:0),centres={};
-      for(let channel=0;channel<4;channel++)centres['centre'+channel]=dropCentres[group.index*4+channel]||[0,0,0];
+      for(let channel=0;channel<4;channel++){
+        const index=group.index*4+channel,initialShape=initialShapeForInk(inks[index]?.id||1);
+        centres['centre'+channel]=dropCentres[index]||[0,0,0];
+        centres['phases'+channel]=initialShape.phases;centres['orientation'+channel]=initialShape.orientation;
+      }
       draw('seed',group.dye[0],{},{...centres,activeSpecies});
       for(let channel=0;channel<4;channel++){
         draw('activeValue',speed,{a:group.dye[0]},{channel});const sum=readReduced(sumField(speed));
@@ -585,7 +608,7 @@ void main() {
       }
       selector.value=String(activeInkIndex);
     }
-    if($('add-ink'))$('add-ink').disabled=inks.length>=MAX_INKS;
+    if($('add-ink')){$('add-ink').disabled=inks.length>=MAX_INKS;$('add-ink').setAttribute('aria-label',inks.length>=MAX_INKS?'Maximum of '+MAX_INKS+' inks':'Add an ink');}
     if($('remove-ink'))$('remove-ink').disabled=inks.length===1;
     if($('domain'))$('domain').value=domainValue();
     if($('speed-value'))$('speed-value').textContent=Number(playbackSpeed.toFixed(2))+'×';
@@ -750,7 +773,7 @@ void main() {
     restoreSettings(settings){restore({modelContent:{modelVersion:5,...settings}});return settingsSnapshot();},
     get settings(){return settingsSnapshot();},
     get time(){return simTime;},get grid(){return dims.active.slice();},
-    get configuration(){return{boundary,containerShape,currentStrength,initialMotion,meanConcentration:scalarGroups[0].means[0],meanConcentration2:scalarGroups[0].means[1],perInk:inks.map((ink,index)=>({id:ink.id,meanConcentration:scalarGroups[Math.floor(index/4)].means[index%4],centre:dropCentres[index].slice(),absorption:absorptionFor(ink.colour)})),fluidCells:dims.fluidCount};},
+    get configuration(){return{boundary,containerShape,currentStrength,initialMotion,meanConcentration:scalarGroups[0].means[0],meanConcentration2:scalarGroups[0].means[1],perInk:inks.map((ink,index)=>({id:ink.id,meanConcentration:scalarGroups[Math.floor(index/4)].means[index%4],centre:dropCentres[index].slice(),initialShape:initialShapeForInk(ink.id),absorption:absorptionFor(ink.colour)})),fluidCells:dims.fluidCount};},
     get camera(){return {center:cameraCenter,span:cameraSpan};},
     tracerDiagnostics(){
       if(!particleRendering)return{available:false,perInk:[]};

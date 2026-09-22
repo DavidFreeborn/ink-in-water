@@ -29,7 +29,7 @@
       <figure class="experiment-figure" aria-describedby="experiment-description">
         <div id="ink-stage" class="ink-stage" aria-busy="true">
           <canvas id="ink-canvas" width="1440" height="1080" role="img" aria-label="Three-dimensional ink concentration in a volume of water">
-            A volume rendering of ink moving through water. The controls change initial currents, select a closed container or periodic space, add and edit inks, and rotate the view through 360 degrees.
+            A volume rendering of ink moving through water. The controls change initial currents, select a container with walls or a flat 3-torus, add and edit inks, and rotate the view through 360 degrees.
           </canvas>
           <svg id="boundary-outline" class="boundary-outline" aria-hidden="true" focusable="false" hidden></svg>
           <p id="loading" class="stage-message" role="status">Preparing the water…</p>
@@ -82,13 +82,13 @@
               <div class="parameter select-parameter full-width">
                 <label for="domain" class="visually-hidden">Domain</label>
                 <select id="domain">
-                  <optgroup label="Closed containers">
-                    <option value="cuboid" selected>Cuboid (closed)</option>
-                    <option value="cylinder">Cylinder (closed)</option>
-                    <option value="sphere">Sphere (closed)</option>
+                  <optgroup label="Containers with walls">
+                    <option value="cuboid" selected>Cuboid container</option>
+                    <option value="cylinder">Cylindrical container</option>
+                    <option value="sphere">Spherical container</option>
                   </optgroup>
-                  <optgroup label="Periodic space">
-                    <option value="periodic">3D torus (periodic)</option>
+                  <optgroup label="Space without walls">
+                    <option value="periodic">Flat 3-torus</option>
                   </optgroup>
                 </select>
               </div>
@@ -159,13 +159,14 @@
     <p>Here <b>u</b> is velocity, <i>t</i> is time, π is pressure divided by water density after subtracting hydrostatic pressure, and <b>e</b><sub>y</sub> is the upward unit vector. The equations conserve fluid volume, evolve velocity under pressure, viscosity and buoyancy, and transport each ink through the shared flow.</p>
     <p>Kinematic viscosity is ν = 10<sup>−6</sup> m² s<sup>−1</sup>, dye diffusivity is <i>D</i> = 10<sup>−9</sup> m² s<sup>−1</sup>, and gravity is <i>g</i> = 9.81 m s<sup>−2</sup>.</p>
     <p>The solver transports velocity, applies viscosity and buoyancy, then solves for pressure to keep the flow nearly incompressible. Shared fluxes between neighbouring grid cells conserve the amount of each ink.</p>
-    <p>Speed changes the requested rate of fixed time steps; hardware may limit the achieved rate. Currents sets the initial water motion and restarts the experiment; zero starts at rest. Adding or removing ink also restarts it; density and colour edits apply immediately. Positive density contrast drives sinking, negative values drive rising, and zero makes ink neutrally buoyant. Fine uses smaller cells and more tracer samples. View rotates around the full domain.</p>
+    <p>The seed determines the initial currents and an independent shape perturbation and orientation for each drop. Drops have the same nominal radius; Reset repeats the initial conditions.</p>
+    <p>Speed changes the requested rate of fixed time steps; hardware may limit the achieved rate. Currents sets the initial water motion and restarts the experiment; zero starts at rest. Up to three inks can share the flow. Adding or removing ink also restarts it; density and colour edits apply immediately. Positive density contrast drives sinking, negative values drive rising, and zero makes ink neutrally buoyant. Fine uses smaller cells and more tracer samples. View rotates around the full domain.</p>
   </section>
 
   <section aria-labelledby="boundary-model-heading">
     <h2 id="boundary-model-heading">Boundary conditions</h2>
     <p>The cuboid, cylinder and sphere are sealed containers. Water cannot cross their walls and can slide along them without friction (free-slip). Dye has zero flux through a wall. Curved containers are approximated by stair-step surfaces made from grid cells; the velocity, dye and reflected tracers use these same walls.</p>
-    <p>The 3D torus identifies opposite cuboid faces in all three directions. This periodic topology has no walls: every field repeats, and tracers crossing a face re-enter opposite. Its buoyancy uses <i>b</i> − 〈<i>b</i>〉, where 〈<i>b</i>〉 is the volume mean, removing uniform acceleration of the whole fluid.</p>
+    <p>The flat 3-torus identifies opposite cuboid faces in all three directions. It has no boundary. The displayed box is a repeating cell: fields satisfy periodic boundary conditions, and ink crossing one face re-enters through the opposite face. Its buoyancy uses <i>b</i> − 〈<i>b</i>〉, where 〈<i>b</i>〉 is the volume mean, removing uniform acceleration of the whole fluid.</p>
   </section>
 
   <section aria-labelledby="dye-light-heading">

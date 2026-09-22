@@ -1,23 +1,40 @@
 # Validation
 
-The 22 September 2026 audit used Chromium with hardware WebGL 2 on an NVIDIA RTX 4070 Laptop GPU. Run `npm test` with the local server running to reproduce the numerical regressions. The tests instrument the production solver to read fields and configure deterministic experiments; they do not replace its numerical operators.
+The 22 September 2026 audit used Chromium with hardware WebGL 2 on an NVIDIA RTX 4070 Laptop GPU. All seven numerical suites pass. Run `npm test` with the local server running to reproduce them. Tests instrument the production solver to read fields and configure deterministic experiments; they do not replace its numerical operators.
 
 | Check | Result |
 | --- | --- |
-| Brownian transport in still, neutrally buoyant water | Two inks with independent random sequences; mean displacement below 0.11 μm per coordinate, variance error below 0.25%, and cross-ink covariance below 0.3% of the diffusion variance |
-| Cuboid and torus | 60 simulated seconds at a 48 × 72 × 48 grid; conservation, wall flux, periodic ghosts and seam rendering passed |
-| Cylinder and sphere | 30 simulated seconds at a 32 × 48 × 32 grid; mass drift below 5.3 × 10⁻⁸; zero wall flux, dye in solid cells or escaped tracers |
-| Fine pressure solve | 160 × 240 × 160 grid; cuboid/torus divergence RMS below 3.5 × 10⁻⁶ s⁻¹ |
-| Two inks at maximum initial current strength | 5 simulated seconds in each of the four domains; each mass drift below 1.1 × 10⁻⁷; all tracer weights retained |
-| Five and sixteen inks | One simulated second in a sphere; every ink conserved within 1.2 × 10⁻⁷, with all tracer weights retained and no escaped tracers |
-| Independent densities | Opposite ±0.4% contrasts in still water produced downward/upward displacement; two neutral inks left the water at rest; the last of sixteen inks independently contributed buoyancy |
-| Colour independence | Changing colours left hashes of all physical fields identical, including after further evolution |
-| Seeds and playback | Reset reproduced the seeded fields exactly; fresh loads selected new seeds; playback retained the fixed numerical timestep; selected edits, stable ink IDs, exact hex validation, saved settings and migration passed |
+| Initial shapes | The former centred profiles were identical. Independently seeded shapes have distinct profiles; Reset reproduces them exactly. Ink 1’s initial grid and complete tracer buffers remain bit-identical to the preceding release. |
+| Grid/tracer seeding | Both use the same concentration law. Sample errors are below 2.4 × 10⁻⁶; initial amounts agree within 0.10% at the tested grid. Shape variation produces no flow in neutral, still water. |
+| Brownian transport | Two independent ink sequences: mean displacement below 0.11 μm per coordinate, variance error below 0.32%, and cross-ink covariance below 0.33% of the diffusion variance. |
+| Cuboid and torus | 60 simulated seconds at 48 × 72 × 48 cells; conservation, wall flux, periodic ghosts and seam rendering pass. |
+| Cylinder and sphere | 30 simulated seconds at 32 × 48 × 32 cells; mass drift below 5.3 × 10⁻⁸; zero wall flux, dye in solid cells or escaped tracers. |
+| Fine pressure solve | 160 × 240 × 160 cells; cuboid/torus divergence RMS below 3.5 × 10⁻⁶ s⁻¹. |
+| Independent inks | Two inks at maximum initial current strength run for five simulated seconds in each domain; mass drift below 5.1 × 10⁻⁸. Three inks in a sphere conserve each mass within 1.2 × 10⁻⁷; the final ink independently drives buoyancy. |
+| Colour independence | Colour changes leave physical field hashes identical, including after subsequent evolution. |
+| Controls and state | Seeded reset, live selected-ink edits, colour validation, stable identities, saved settings and migration pass. Adding is disabled at three inks, and older larger configurations retain their first three inks. |
 
-Additional allocation and initial-step checks passed with sixteen inks at both Standard and Fine resolution, retaining 8.6 million and 15.6 million active tracers respectively. The grid-rendering fallback accumulated all five or sixteen colours; changing only the final ink changed the image without advancing time. Further checks covered full 360° rotation, fullscreen, saved inline settings, keyboard access, reduced motion and layouts from 320 to 1440 pixels wide. All desktop controls fit on one screen at the tested normal viewport sizes. Narrow screens place controls below the volume; touch targets remain at least 44 pixels high. The model equations also reflow without horizontal overflow.
+Browser checks cover the grid-rendering fallback, full rotation, fullscreen, saved inline settings, keyboard access, reduced motion and responsive layouts. The controls and collapsed model description fit at 1280 × 720 and 653 × 612. Narrow screens place controls below the volume; the new domain labels and equations reflow without horizontal overflow at 320 pixels.
 
-At Standard resolution, a controlled 200-step comparison measured 8.06 ms per physics step in the previous version and 8.13 ms in this release on the tested GPU. The default tracer count was identical, and default dye mass and maximum velocity agreed within floating-point roundoff after 100 steps. In short playback samples, the revised interface rendered about 59 frames per second at 1× (advancing about 0.85 simulated seconds per real second) and about 30 frames per second at 6× (advancing about 1.06). These rates depend on hardware, scene and workload. Fine resolution and additional inks require more memory and computation; a requested speed is not guaranteed.
+## Performance
 
-Pressure ghost caching and shorter reduction chains were checked against the previous implementation with identical field hashes. A further batching experiment also preserved the results but offered no measured speed benefit, so it was not adopted. Grid resolution, molecular diffusivity, tracer counts and integration timesteps were preserved by the performance changes.
+The release now permits at most three inks. Measurements of the preceding release at Standard resolution gave roughly 60, 60, 52, 44, 32 and 26 frames/s for one, two, three, four, six and eight inks respectively. Rendering the additional tracer clouds accounts for most of the increase: completed step cost remained near 7–8 ms for one to four inks, while render cost rose from about 5 to 16 ms. Successful allocation of sixteen inks did not establish acceptable playback performance.
 
-These checks establish conservation, containment and numerical consistency for the tested cases. They do not validate the visualiser against a particular laboratory ink or remove its finite-resolution and wall-geometry approximations; see [the model description](MODEL.md).
+The final release was benchmarked again with all supported counts. Rates below are medians of three approximately one-second playback windows per case. “Actual rate” is simulated seconds per real second; FPS measures animation-frame cadence. Higher requested speed retains the fixed 0.01 s timestep and may reduce frame rate.
+
+| Resolution | Inks | FPS at 1× | Actual rate at 1× | Actual rate at 6× | Texture storage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Standard | 1 | 59.8 | 0.98× | 1.21× | 363 MiB |
+| Standard | 2 | 59.6 | 0.60× | 1.00× | 382 MiB |
+| Standard | 3 | 51.4 | 0.51× | 0.88× | 400 MiB |
+| Fine | 1 | 35.8 | 0.36× | 0.37× | 992 MiB |
+| Fine | 2 | 27.8 | 0.28× | 0.29× | 1025 MiB |
+| Fine | 3 | 23.7 | 0.24× | 0.24× | 1059 MiB |
+
+The benchmark uses a fresh page per case, a 1280 × 800 viewport at device-pixel ratio 1, seed 125, cuboid walls, current strength 1 and density contrast 0.04% for every ink. Each playback phase resets and warms up for 20 steps. Step and render timings include a blocking pixel readback to await GPU completion; they include synchronization overhead. Playback uses the normal animation loop without injected synchronization. Texture storage excludes driver overhead and temporary allocation peaks. These short, controlled measurements are specific to this machine and workload.
+
+Fine is a quality/performance tradeoff even with one ink. The three-ink limit improves the available playback range without reducing grid resolution, molecular diffusivity, tracer detail or integration accuracy. Initial-shape randomization occurs only when the experiment is seeded.
+
+Run `npm run benchmark -- --mode both --fast` to reproduce the supported-count benchmark. JSON reports retain samples, ranges, hardware identity and the tested source hash in `qa/`. Optional `--source` and `--counts` arguments support comparisons against earlier releases. A failed case or graphics/browser error returns a nonzero exit status.
+
+These checks establish numerical consistency for the tested cases. They do not validate a particular laboratory ink or remove the finite-resolution and wall-geometry approximations described in [MODEL.md](MODEL.md).

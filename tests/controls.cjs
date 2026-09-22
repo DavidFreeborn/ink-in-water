@@ -114,6 +114,8 @@ assert.notEqual(instrumented, source, 'Read-only diagnostics hook found');
 
     // Species retain identities when a middle entry is removed and labels are renumbered.
     await page.locator('#add-ink').click();
+    assert.equal(await page.locator('#add-ink').isDisabled(),true,'The three-ink limit prevents additional allocation');
+    assert.equal(await page.evaluate(()=>InkSimulation.settings.maxInks),3);
     const beforeRemoval=await page.evaluate(()=>InkSimulation.settings.inks);
     assert.equal(beforeRemoval.length,3);
     await page.locator('#ink-select').selectOption('1');
@@ -142,6 +144,11 @@ assert.notEqual(instrumented, source, 'Read-only diagnostics hook found');
     assert.equal(restored.domain,'sphere');
     assert.equal(restored.viewAngleDegrees,175);
     assert.equal(await page.locator('#ink-select').inputValue(),'2');
+
+    const excessive=await page.evaluate(()=>InkSimulation.restoreSettings({inks:Array.from({length:16},(_,i)=>({id:i+1,density:.04,colour:'#3657b2'})),activeInkIndex:15}));
+    assert.equal(excessive.inks.length,3,'Older saved configurations obey the reduced ink limit');
+    assert.equal(excessive.activeInkIndex,2,'Restoring an excess selection stays inside the retained inks');
+    assert.equal(await page.locator('#add-ink').isDisabled(),true);
 
     const legacy3={modelVersion:3,densityContrastPercent:.11,densityContrastPercent2:-.03,secondInk:true,inkColour:'blue',inkColour2:'amber',initialMotion:'still',boundary:'periodic',containerShape:'cuboid',seed:101,playbackSpeed:.75,viewAngleDegrees:60,quality:'standard'};
     const migrated3=await page.evaluate(state=>{InkSimulation.restoreSettings(state);return InkSimulation.settings;},legacy3);
