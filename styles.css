@@ -300,7 +300,7 @@ select { padding-right: 24px; }
   .controls button, .controls select, .controls input[type="number"], .controls input[type="text"] { min-height: 32px; padding-top: 4px; padding-bottom: 4px; }
   .controls input[type="color"] { height: 32px; }
   .controls input[type="range"] { height: 22px; margin-top: 2px; }
-  .ink-stage { height: clamp(280px, calc(100svh - 156px), 600px); }
+  .ink-stage { height: clamp(280px, calc(100svh - 164px), 600px); }
 }
 
 @media (max-width: 359px) {
