@@ -14,7 +14,7 @@ The model follows dissolved dye in three dimensions. Each concentration cᵢ is 
 
 Here u is velocity, t is time, π is pressure divided by water density after subtracting hydrostatic pressure, and e_y is the upward unit vector. The equations conserve fluid volume, evolve velocity under pressure, viscosity and buoyancy, and transport each ink through the shared flow.
 
-Kinematic viscosity is ν = 10⁻⁶ m² s⁻¹, dye diffusivity is D = 10⁻⁹ m² s⁻¹, and gravity is g = 9.81 m s⁻². Current strength multiplies an initial velocity field with amplitude parameter 4 mm s⁻¹ and wavelength 20 mm; zero starts at rest. Pressure projection adjusts the initial flow to the selected walls.
+Kinematic viscosity is ν = 10⁻⁶ m² s⁻¹, dye diffusivity is D = 10⁻⁹ m² s⁻¹, and gravity is g = 9.81 m s⁻². Current strength multiplies an initial velocity field with amplitude parameter 4 mm s⁻¹ and wavelength 20 mm; zero starts at rest. Pressure projection adjusts the initial flow to the selected walls. The seed fixes this flow and independently selects each ink’s initial shape phases and orientation. All drops retain the same nominal radius and perturbation amplitude. Equal densities and similar local currents can still produce similar evolution.
 
 The staggered-grid solver uses bounded MacCormack velocity advection, explicit viscosity, conservative finite-volume dye transport with MC limiting and SSP-RK2, and approximate multigrid pressure projection. Each step uses three pressure V-cycles for curved containers and two for the cuboid or torus. Shared face fluxes preserve the total amount of each ink.
 
@@ -26,7 +26,7 @@ The cuboid, cylinder and sphere are sealed containers. Water cannot cross their 
 
 The cuboid measures 8 × 12 × 8 cm. The cylinder has radius 4 cm and height 12 cm; the sphere has radius 4 cm. Only cells whose corners lie inside the selected shape contain fluid.
 
-The 3D torus identifies opposite cuboid faces in all three directions. This periodic topology has no walls: every field repeats, and tracers crossing a face re-enter opposite. Its buoyancy uses b − ⟨b⟩, where ⟨b⟩ is the volume mean, removing uniform acceleration of the whole fluid.
+The flat 3-torus identifies opposite cuboid faces in all three directions. It has no boundary. The displayed box is a repeating cell: fields satisfy periodic boundary conditions, and ink crossing one face re-enters through the opposite face. Its buoyancy uses b − ⟨b⟩, where ⟨b⟩ is the volume mean, removing uniform acceleration of the whole fluid.
 
 ## Colour
 
@@ -42,7 +42,7 @@ Normalised Gaussian kernels spread the samples into concentration integrated alo
 
 Picker RGB values specify relative transmittance through a 2 mm reference column: κ = −ln(RGB/255)/(0.002 m). Black uses a finite transmittance floor of 1/65535; white has zero absorption. The default blue #3657b2 retains the original coefficients [780, 540, 180] m⁻¹.
 
-Up to 16 inks have separate concentration fields and weighted tracer samples, sharing the velocity field and diffusivity. Each ink uses independent Brownian sequences.
+Up to three inks have separate concentration fields and weighted tracer samples, sharing the velocity field and diffusivity. Each ink uses independent Brownian sequences.
 
 ## Limitations
 

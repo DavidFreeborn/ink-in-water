@@ -79,16 +79,16 @@ function assertConservation(initial,after,label){
   const after=await page.evaluate(()=>InkSimulation.qaInkStatistics()),flow=await page.evaluate(()=>InkSimulation.diagnostics());assertConservation(initial,after,label+' maximum-current run');
   assert(flow.finite&&flow.glError===0&&flow.divergenceAfter<3e-4,label+' incompressible finite flow');report.stress[label]={initial,after,flow};console.log('Two inks: '+label+' 5 s at maximum current PASS.');
  }
- // Exercise a second RGBA group and the last permitted species, including their force.
+ // Exercise all three supported species, including independent force from the last ink.
  report.many={};
- for(const count of [5,16]){
+ for(const count of [3]){
   const densities=Array.from({length:count},(_,i)=>i===count-1?.4:0);
   await page.evaluate(options=>InkSimulation.qaInkConfigure(options),{densities,shape:'sphere'});
   const initial=await page.evaluate(()=>InkSimulation.qaInkStatistics());
   await page.evaluate(()=>InkSimulation.step(100));
   const after=await page.evaluate(()=>InkSimulation.qaInkStatistics()),flow=await page.evaluate(()=>InkSimulation.diagnostics());
   assertConservation(initial,after,count+' independent inks');
-  assert(flow.maxSpeed>.001,'Last ink contributes buoyancy across RGBA groups');
+  assert(flow.maxSpeed>.001,'Last ink contributes its own buoyancy');
   assert(after.scalar[count-1].centroid[1]<initial.scalar[count-1].centroid[1]-.001,'Last ink sinks');
   assert.equal(flow.perInk.length,count);assert.equal(flow.glError,0);
   report.many[count]={initial,after,flow};console.log(count+' independent inks PASS.');

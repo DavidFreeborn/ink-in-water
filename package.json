@@ -1,6 +1,6 @@
 {
   "name": "ink-in-water",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "An interactive three-dimensional model of ink fibrillation in water.",
   "scripts": {
@@ -8,7 +8,8 @@
     "build": "node scripts/build-site.cjs",
     "build:inline": "node build-inline.cjs",
     "test": "node verify.cjs",
-    "check": "node --check ink.js && node --check boundary-view.js && node --check interface.js"
+    "check": "node --check ink.js && node --check boundary-view.js && node --check interface.js",
+    "benchmark": "node scripts/benchmark.cjs"
   },
   "devDependencies": {
     "playwright": "1.61.0"
