@@ -45,7 +45,7 @@ function persist(){fs.writeFileSync(output+'.json',JSON.stringify(report,null,2)
  const browser=await chromium.launch({headless:true,args:['--use-angle=d3d11']});
  try{
   for(const quality of mode==='both'?['standard','fine']:[mode]){
-   const counts=countsOption?parseCounts(countsOption):[1,2,3];
+   const counts=countsOption?parseCounts(countsOption):[1,2,3,4,5];
    for(const count of counts){
     const result={quality,count};report.cases.push(result);persist();
     console.log('START',quality,count);

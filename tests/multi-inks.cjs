@@ -33,13 +33,14 @@ const hook=String.raw`qaInkConfigure(options={}){
   for(let axis=0;axis<3;axis++){t.centroid[axis]+=weight*raw[i+axis];t.finite&&=Number.isFinite(raw[i+axis]);}t.finite&&=Number.isFinite(weight);
  }}
  for(const t of tracers)t.centroid=t.centroid.map(x=>x/t.mass);
- return{time:simTime,scalar,tracers};
+ return{time:simTime,scalarGroupCount:scalarGroups.length,scalar,tracers};
 },`;
 const instrumented=source.replace('window.InkSimulation={','window.InkSimulation={'+hook);new Function(instrumented);
 function assertConservation(initial,after,label){
  for(let species=0;species<initial.scalar.length;species++){
   const s=after.scalar[species],start=initial.scalar[species],t=after.tracers[species],old=initial.tracers[species];
   assert(start.mass>0&&old.mass>0&&old.count>100000,label+' has a populated independent species '+species);
+  assert.equal(old.outside,0,label+' initial tracer containment '+species);
   assert(s.finite&&s.min>=-1e-7&&s.max<1.02,label+' bounded concentration '+species);
   assert(Math.abs(s.mass/start.mass-1)<1e-5,label+' conserved Eulerian mass '+species);assert.equal(s.solidMaximum,0);
   assert(t.finite);assert.equal(t.outside,0,label+' tracer containment '+species);assert.equal(t.nonpositive,0);
@@ -79,19 +80,52 @@ function assertConservation(initial,after,label){
   const after=await page.evaluate(()=>InkSimulation.qaInkStatistics()),flow=await page.evaluate(()=>InkSimulation.diagnostics());assertConservation(initial,after,label+' maximum-current run');
   assert(flow.finite&&flow.glError===0&&flow.divergenceAfter<3e-4,label+' incompressible finite flow');report.stress[label]={initial,after,flow};console.log('Two inks: '+label+' 5 s at maximum current PASS.');
  }
- // Exercise all three supported species, including independent force from the last ink.
+ // Five species cross the four-channel texture boundary. All-neutral droplets
+ // must still leave water at rest before isolating the final species' force.
+ await page.evaluate(()=>InkSimulation.qaInkConfigure({densities:[0,0,0,0,0],shape:'sphere'}));
+ await page.evaluate(()=>InkSimulation.step(10));
+ const fiveNeutral=await page.evaluate(()=>InkSimulation.diagnostics());
+ assert.equal(fiveNeutral.maxSpeed,0,'Five neutral inks leave still water at rest');
+ assert.equal(fiveNeutral.perInk.length,5);report.fiveNeutral=fiveNeutral;
+ // Counts three and four share one texture; five requires a second group.
  report.many={};
- for(const count of [3]){
+ for(const count of [3,4,5]){
   const densities=Array.from({length:count},(_,i)=>i===count-1?.4:0);
   await page.evaluate(options=>InkSimulation.qaInkConfigure(options),{densities,shape:'sphere'});
   const initial=await page.evaluate(()=>InkSimulation.qaInkStatistics());
   await page.evaluate(()=>InkSimulation.step(100));
   const after=await page.evaluate(()=>InkSimulation.qaInkStatistics()),flow=await page.evaluate(()=>InkSimulation.diagnostics());
+  assert.equal(initial.scalarGroupCount,Math.ceil(count/4),'Expected independent scalar texture groups');
   assertConservation(initial,after,count+' independent inks');
   assert(flow.maxSpeed>.001,'Last ink contributes its own buoyancy');
-  assert(after.scalar[count-1].centroid[1]<initial.scalar[count-1].centroid[1]-.001,'Last ink sinks');
+  for(const representation of ['scalar','tracers'])assert(after[representation][count-1].centroid[1]<initial[representation][count-1].centroid[1]-.001,representation+' last ink sinks');
   assert.equal(flow.perInk.length,count);assert.equal(flow.glError,0);
   report.many[count]={initial,after,flow};console.log(count+' independent inks PASS.');
+ }
+ // Recolour species in both texture groups and compare their entire future.
+ const beforeFiveColours=await page.evaluate(()=>InkSimulation.qaInkFingerprint());
+ for(const [selection,colour]of [['0','#137953'],['4','#ef3271']]){
+  await page.locator('#ink-select').selectOption(selection);await page.locator('#ink-hex').fill(colour);await page.locator('#ink-hex').press('Tab');
+ }
+ const afterFiveColours=await page.evaluate(()=>InkSimulation.qaInkFingerprint());
+ assert.deepEqual(afterFiveColours,beforeFiveColours,'Colour changes across scalar groups preserve every physical field');
+ await page.evaluate(()=>InkSimulation.step(30));const fiveColouredFuture=await page.evaluate(()=>InkSimulation.qaInkFingerprint());
+ await page.evaluate(()=>{InkSimulation.qaInkConfigure({densities:[0,0,0,0,.4],shape:'sphere'});InkSimulation.step(130);});
+ const fiveOriginalFuture=await page.evaluate(()=>InkSimulation.qaInkFingerprint());
+ assert.deepEqual(fiveColouredFuture,fiveOriginalFuture,'Colour choices across scalar groups cannot alter later evolution');
+ report.fiveColours={beforeFiveColours,afterFiveColours,fiveColouredFuture,fiveOriginalFuture};
+ // A shorter five-species stress run covers all wall geometries and the torus;
+ // the longer two-species runs above already exercise repeated wall encounters.
+ report.fiveStress={};
+ for(const [shape,boundary]of [['cuboid','container'],['cylinder','container'],['sphere','container'],['sphere','periodic']]){
+  const label=boundary==='periodic'?'torus':shape;
+  await page.evaluate(options=>InkSimulation.qaInkConfigure(options),{shape,boundary,strength:3,densities:[1.2,-.4,.4,0,-.2]});
+  const initial=await page.evaluate(()=>InkSimulation.qaInkStatistics());
+  await page.evaluate(()=>InkSimulation.step(100));
+  const after=await page.evaluate(()=>InkSimulation.qaInkStatistics()),flow=await page.evaluate(()=>InkSimulation.diagnostics());
+  assert.equal(initial.scalarGroupCount,2);assertConservation(initial,after,'Five inks '+label+' maximum-current run');
+  assert(flow.finite&&flow.glError===0&&flow.divergenceAfter<3e-4,'Five inks '+label+' incompressible finite flow');
+  report.fiveStress[label]={initial,after,flow};console.log('Five inks: '+label+' 1 s at maximum current PASS.');
  }
  assert.deepEqual(errors,[]);report.errors=errors;fs.writeFileSync('qa/multi-inks-validation.json',JSON.stringify(report,null,2));
  const summary={secondDensityMaxSpeed:secondFlow.maxSpeed,oppositeCentroidChanges:oppositeAfter.scalar.map((s,i)=>s.centroid[1]-oppositeInitial.scalar[i].centroid[1]),colourPhysicsIdentical:true,stress:Object.fromEntries(Object.entries(report.stress).map(([name,r])=>[name,{massDrift:r.after.scalar.map((s,i)=>s.mass/r.initial.scalar[i].mass-1),divergence:r.flow.divergenceAfter,tracerCounts:r.after.tracers.map(t=>t.count),outside:r.after.tracers.map(t=>t.outside)}]))};
