@@ -36,7 +36,6 @@
   uniform float fluidCount;
   uniform vec2 shapePhase;
   uniform vec4 shapeOrientation;
-  uniform vec3 currentPhase;
   uniform sampler2D a,b,c,geometry;
   const vec3 X=vec3(1,0,0), Y=vec3(0,1,0), Z=vec3(0,0,1);
   // One concentration law seeds both the Eulerian field and optical quadrature.
@@ -133,7 +132,7 @@
     const width=target?target.width:canvas.width,height=target?target.height:canvas.height;
     if(renderState.width!==width||renderState.height!==height){gl.viewport(0,0,width,height);renderState.width=width;renderState.height=height;}
     const g=target?target.g:velocity[0].g;
-    const vals={n:g.n,columns:g.columns,h:g.h,dt:DT,time:simTime,boundaryMode:boundary==='periodic'?1:0,geometryMode:boundary==='periodic'||containerShape==='cuboid'?0:containerShape==='cylinder'?1:2,fluidCount:g.fluidCount||1,sceneSeed:experimentSeed|0,shapePhase,currentPhase,...extra};
+    const vals={n:g.n,columns:g.columns,h:g.h,dt:DT,time:simTime,boundaryMode:boundary==='periodic'?1:0,geometryMode:boundary==='periodic'||containerShape==='cuboid'?0:containerShape==='cylinder'?1:2,fluidCount:g.fluidCount||1,sceneSeed:experimentSeed|0,shapePhase,...extra};
     if(p.uniforms.geometry)textures={...textures,geometry:g.geometry||levels[0].geometry};
     let unit=0;
     for(const [key,f]of Object.entries(textures)){const u=p.uniforms[key];if(!u)continue;
@@ -149,7 +148,7 @@
   let DT=.01;
   let simTime=0, stepIndex=0, angle=0, running=!reduced.matches, lastFrame=0, accumulator=0, raf=0, destroyed=false, visible=true;
   let quality='standard', initialMotion='gentle', boundary='container',containerShape='cuboid',currentStrength=1;
-  const MAX_INKS=3, REFERENCE_COLUMN=.002, DEFAULT_COLOUR='#3657b2';
+  const MAX_INKS=5, REFERENCE_COLUMN=.002, DEFAULT_COLOUR='#3657b2';
   let inks=[{id:1,density:.04,colour:DEFAULT_COLOUR}], activeInkIndex=0, nextInkId=2, dropCentres=[];
   const palette={blue:[780,540,180],amber:[140,450,1100],red:[160,800,950],green:[700,200,600],violet:[460,950,240],black:[800,800,800]};
   const normaliseHex=value=>/^#?[0-9a-f]{6}$/i.test(String(value).trim())?'#'+String(value).trim().replace(/^#/,'').toLowerCase():null;
@@ -160,20 +159,43 @@
   function chooseDropCentres(){
     if(inks.length===1)return [[.04,.08,.04]];
     if(inks.length===2)return [[.028,.08,.04],[.052,.08,.04]];
-    // Nineteen sites fit all three containers without shrinking the drops.
-    // At Standard/Fine, their 18 mm separation also separates smoothed edges.
-    const sites=[];
-    for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++)for(let z=-1;z<=1;z++)if(x*x+y*y+z*z<=2)sites.push([.04+.018*x,.06+.018*y,.04+.018*z]);
-    return sites.map((position,index)=>({position,key:seedUnit(experimentSeed^Math.imul(index+1,0x9e3779b9))})).sort((a,b)=>a.key-b.key).slice(0,inks.length).map(site=>site.position);
+    // A balanced ring keeps all drops distinct in the initial view. A shallow
+    // depth variation separates their locations in three dimensions. The same
+    // layout fits the sphere, including its conservative voxel wall at grid 32.
+    return inks.map((_,index)=>{
+      const theta=2*Math.PI*index/inks.length;
+      return [.04+.022*Math.sin(theta),.062+.022*Math.cos(theta),.04+.005*Math.cos(2*theta)];
+    });
   }
   let manualSteps=0, playbackSpeed=1;
   function freshSeed(){return crypto.getRandomValues(new Uint32Array(1))[0];}
   function seedUnit(value){value=Math.imul(value^(value>>>16),0x7feb352d);value=Math.imul(value^(value>>>15),0x846ca68b);return ((value^(value>>>16))>>>0)/4294967296;}
-  let experimentSeed=freshSeed(), shapePhase, currentPhase;
+  const CURRENT_MODES=16, currentCandidates=[];
+  // Integer Fourier indices make the field periodic on the full physical box.
+  // Keep one sign of each wavevector and a resolved band of 18–30 mm wavelengths.
+  for(let x=0;x<=4;x++)for(let y=-6;y<=6;y++)for(let z=-4;z<=4;z++){
+    if(x===0&&(y<0||(y===0&&z<=0)))continue;
+    const wave=[x/.08,y/.12,z/.08].map(value=>2*Math.PI*value),wavelength=2*Math.PI/Math.hypot(...wave);
+    if(wavelength>=.018&&wavelength<=.030)currentCandidates.push({wave,id:(x+4)*143+(y+6)*11+z+4});
+  }
+  let experimentSeed=freshSeed(), shapePhase, currentModes=[];
+  function chooseCurrentModes(){
+    const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+    return currentCandidates.map(mode=>({...mode,key:seedUnit(experimentSeed^Math.imul(mode.id,0x9e3779b9)^0x62a9d9ed)}))
+      .sort((a,b)=>a.key-b.key||a.id-b.id).slice(0,CURRENT_MODES).map(mode=>{
+        const normal=mode.wave.map(value=>value/Math.hypot(...mode.wave));
+        const axis=normal.map(Math.abs).indexOf(Math.min(...normal.map(Math.abs)));
+        const reference=[0,0,0];reference[axis]=1;
+        const perpendicular=cross(normal,reference),length=Math.hypot(...perpendicular);
+        const first=perpendicular.map(value=>value/length),second=cross(normal,first);
+        const key=experimentSeed^Math.imul(mode.id,0xd1b54a35),rotation=2*Math.PI*seedUnit(key^0x91e10da5);
+        return{wave:mode.wave,polarization:first.map((value,i)=>value*Math.cos(rotation)+second[i]*Math.sin(rotation)),phase:2*Math.PI*seedUnit(key^0x7f4a7c15)};
+      });
+  }
   function chooseSeed(value){
     experimentSeed=value>>>0;
     shapePhase=[0xa511e9b3,0x63d83595].map(salt=>2*Math.PI*seedUnit(experimentSeed^salt));
-    currentPhase=[0xb5297a4d,0x68e31da4,0x1b56c4e9].map(salt=>2*Math.PI*seedUnit(experimentSeed^salt));
+    currentModes=chooseCurrentModes();
     if($('seed'))$('seed').value=String(experimentSeed);
   }
   function initialShapeForInk(id){
@@ -217,10 +239,13 @@
         outColor=vec4(at(a,q).r+dot(coefficients,concentration),0,0,1);
       }`);
     program('seedAmbient',`uniform float currentAmplitude;
+      ${Array.from({length:CURRENT_MODES},(_,i)=>`uniform vec4 currentWave${i};uniform vec3 currentPolarization${i};`).join('\n')}
       void main(){ivec3 q=cell();if(q.z>=int(n.z)){outColor=vec4(0);return;}
-        vec3 phase=((vec3(q)-.5)*h-vec3(.04,.080,.04))*314.159265+currentPhase;
-        vec3 v=currentAmplitude/1.414213562*vec3(sin(phase.z)+cos(phase.y),sin(phase.x)+cos(phase.z),sin(phase.y)+cos(phase.x));
-        outColor=vec4(v,0);
+        vec3 p=(vec3(q)-.5)*h-vec3(.04,.06,.04),v=vec3(0);
+        // Each component is evaluated at its own staggered face, not the cell centre.
+        ${Array.from({length:CURRENT_MODES},(_,i)=>`v+=currentPolarization${i}*sin(vec3(dot(currentWave${i}.xyz,p)+currentWave${i}.w)+.5*h*currentWave${i}.xyz);`).join('\n')}
+        // Equal-energy, transverse modes. Full-box RMS equals the former ABC seed.
+        outColor=vec4(currentAmplitude*sqrt(3./${CURRENT_MODES}.)*v,0);
       }`);
     program('advectV',`void main(){ivec3 q=cell();if(q.z>=int(n.z)){outColor=vec4(0);return;}
       vec3 px=trace(a,vec3(faceCell(q,0))+.5*X,dt)-.5*X,py=trace(a,vec3(faceCell(q,1))+.5*Y,dt)-.5*Y,pz=trace(a,vec3(faceCell(q,2))+.5*Z,dt)-.5*Z;
@@ -583,7 +608,9 @@ void main() {
       }
       draw('scalarGhosts',group.dye[1],{a:group.dye[0]});group.dye.swap();
     }
-    draw('seedAmbient',velocity[0],{},{currentAmplitude:.004*currentStrength});
+    const currentUniforms={currentAmplitude:.004*currentStrength};
+    currentModes.forEach((mode,i)=>{currentUniforms['currentWave'+i]=[...mode.wave,mode.phase];currentUniforms['currentPolarization'+i]=mode.polarization;});
+    draw('seedAmbient',velocity[0],{},currentUniforms);
     // First impose the selected velocity boundary with zero pressure. In a
     // container this changes boundary fluxes, so a genuine initial projection follows.
     draw('project',velocity[1],{a:velocity[0],b:levels[0].p[0]});velocity.swap();

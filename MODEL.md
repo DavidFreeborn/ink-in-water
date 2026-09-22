@@ -14,11 +14,24 @@ The model follows dissolved dye in three dimensions. Each concentration cᵢ is 
 
 Here u is velocity, t is time, π is pressure divided by water density after subtracting hydrostatic pressure, and e_y is the upward unit vector. The equations conserve fluid volume, evolve velocity under pressure, viscosity and buoyancy, and transport each ink through the shared flow.
 
-Kinematic viscosity is ν = 10⁻⁶ m² s⁻¹, dye diffusivity is D = 10⁻⁹ m² s⁻¹, and gravity is g = 9.81 m s⁻². Current strength multiplies an initial velocity field with amplitude parameter 4 mm s⁻¹ and wavelength 20 mm; zero starts at rest. Pressure projection adjusts the initial flow to the selected walls. The seed fixes this flow and independently selects each ink’s initial shape phases and orientation. All drops retain the same nominal radius and perturbation amplitude. Equal densities and similar local currents can still produce similar evolution.
+Kinematic viscosity is ν = 10⁻⁶ m² s⁻¹, dye diffusivity is D = 10⁻⁹ m² s⁻¹, and gravity is g = 9.81 m s⁻².
 
 The staggered-grid solver uses bounded MacCormack velocity advection, explicit viscosity, conservative finite-volume dye transport with MC limiting and SSP-RK2, and approximate multigrid pressure projection. Each step uses three pressure V-cycles for curved containers and two for the cuboid or torus. Shared face fluxes preserve the total amount of each ink.
 
 Speed changes the requested rate of fixed time steps without changing their duration or the physical parameters; hardware may limit the achieved rate. Currents changes the initial flow and restarts the experiment. Adding or removing ink also restarts it; density and colour edits apply immediately. Positive density contrast drives sinking, negative values drive rising, and zero makes ink neutrally buoyant. Fine uses smaller cells and more tracer samples.
+
+## Initial conditions
+
+The seed selects sixteen distinct Fourier wavevectors kₘ = 2π(nₓ/0.08, nᵧ/0.12, n_z/0.08), with integer indices and wavelengths from 18 to 30 mm. Opposite wavevectors count as the same mode. Each mode has a seeded phase φₘ and a unit polarisation eₘ perpendicular to kₘ. Before pressure projection, the initial velocity is
+
+```
+u₀(x) = a √(3/16) ∑ₘ₌₁¹⁶ eₘ sin(kₘ · (x − x₀) + φₘ),
+kₘ · eₘ = 0,     a = 0.004 × current strength  m s⁻¹.
+```
+
+Here x₀ is the box centre. Perpendicular polarisations make each continuous mode divergence-free. The integer indices match the full periodic box. The full-box root-mean-square speed is √(3/2) a, or 4.90 mm s⁻¹ at the default strength. Components are sampled at their respective staggered cell faces; pressure projection removes the sampling error in divergence and imposes container walls, changing the initial energy. Zero current strength starts at rest. The modes specify the initial condition only; the momentum equation evolves the flow thereafter.
+
+The seed independently selects each ink’s shape phases and spatial orientation. Drops have nominal radius 6.5 mm and the same 13% surface perturbation amplitude. Three to five drops form a balanced arrangement with shallow depth variation, separated in the initial view and contained within every domain. Similar size and density can produce similar broad sinking behaviour, while different local velocity gradients stretch each drop differently. Reset reproduces the initial conditions within this version of the model.
 
 ## Boundary conditions
 
@@ -42,13 +55,13 @@ Normalised Gaussian kernels spread the samples into concentration integrated alo
 
 Picker RGB values specify relative transmittance through a 2 mm reference column: κ = −ln(RGB/255)/(0.002 m). Black uses a finite transmittance floor of 1/65535; white has zero absorption. The default blue #3657b2 retains the original coefficients [780, 540, 180] m⁻¹.
 
-Up to three inks have separate concentration fields and weighted tracer samples, sharing the velocity field and diffusivity. Each ink uses independent Brownian sequences.
+Up to five inks have separate concentration fields and weighted tracer samples, sharing the velocity field and diffusivity. Each ink uses independent Brownian sequences.
 
 ## Limitations
 
 The fluid grid has 112 × 168 × 112 cells at Standard resolution and 160 × 240 × 160 at Fine. Flow advances in 0.01 s steps; dye transport uses smaller substeps when needed to keep the outgoing advective Courant number below 0.45. All fields use 32-bit floating-point values.
 
-Fine optical filaments do not alter the coarser concentration field driving buoyancy. Grid spacing, numerical diffusion, tracer sampling and optical smoothing limit the detail. Velocity interpolation near stair-step corners introduces additional transport error. The model describes idealised miscible dye and omits pigment settling, surface chemistry, variable viscosity, refraction and light scattering.
+Fine optical filaments do not alter the coarser concentration field driving buoyancy. Grid spacing, numerical diffusion, tracer sampling and optical smoothing limit the detail. Velocity interpolation near stair-step corners introduces additional transport error. The prescribed initial spectrum and near-spherical drops define an idealised experiment. The model omits pipette injection, pigment settling, surface chemistry, variable viscosity, refraction and light scattering.
 
 ## References
 
