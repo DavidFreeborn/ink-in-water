@@ -94,21 +94,44 @@ h1 {
 
 .controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: end;
-  gap: 12px 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 17px;
   padding-left: 22px;
   border-left: 1px solid var(--rule);
   font-family: var(--sans);
 }
 
-.playback { display: flex; grid-column: 1 / -1; gap: 7px; margin-bottom: 3px; }
+.control-group { min-width: 0; margin: 0; padding: 0; border: 0; }
 
-.seed-parameter, .ink-pair, .second-ink-toggle { grid-column: 1 / -1; }
-.ink-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
-.second-ink-toggle { display: flex; align-items: center; gap: 9px; min-height: 26px; font-size: 14px; }
-.second-ink-toggle input { margin: 0; accent-color: var(--blue); width: 16px; height: 16px; }
-.controls:has(#container-shape-control[hidden]) .boundary-parameter { grid-column: 1 / -1; }
+.control-group + .control-group { padding-top: 13px; border-top: 1px solid var(--rule); }
+
+.control-group legend { padding: 0 0 8px; font-size: 14px; line-height: 1.35; font-weight: 600; }
+
+.control-group + .control-group legend { float: left; width: 100%; }
+
+.group-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 8px 12px; clear: both; }
+
+.playback { display: flex; grid-column: 1 / -1; gap: 7px; }
+
+.full-width, .seed-parameter { grid-column: 1 / -1; }
+
+.ink-selection { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; }
+
+.ink-selection select { min-width: 0; width: 100%; }
+
+.ink-selection button { padding-right: 10px; padding-left: 10px; }
+
+.colour-parameter { display: grid; grid-template-columns: auto 39px minmax(0, 1fr); align-items: center; gap: 8px; }
+
+input[type="color"] { width: 39px; height: 36px; padding: 3px; border: 1px solid #9ba1a4; border-radius: 0; background: var(--paper); cursor: pointer; }
+
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+
+input[type="color"]::-webkit-color-swatch { border: 0; }
+
+input[type="color"]::-moz-color-swatch { border: 0; }
+
+#ink-hex { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
 
 button {
   min-height: 38px;
@@ -139,11 +162,19 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .parameter-heading output { color: var(--blue); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.select-parameter label, .seed-parameter label { display: block; margin-bottom: 6px; }
+.select-parameter label { display: block; margin-bottom: 4px; }
+
+.select-parameter label.visually-hidden { margin: -1px; }
 
 .select-parameter select { display: block; width: 100%; }
 
 .seed-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+
+.seed-parameter { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; }
+
+.inline-parameter { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; }
+
+.inline-parameter label { margin: 0; }
 
 .seed-controls input { min-width: 0; width: 100%; }
 
@@ -230,7 +261,7 @@ input[type="range"] {
 
 .model-parameters tbody th { width: 45%; }
 
-select, input[type="number"] { min-height: 38px; padding: 6px 9px; border: 1px solid #9ba1a4; border-radius: 0; background: var(--paper); color: var(--ink); font-size: 14px; }
+select, input[type="number"], input[type="text"] { min-height: 36px; padding: 5px 8px; border: 1px solid #9ba1a4; border-radius: 0; background: var(--paper); color: var(--ink); font-size: 14px; }
 
 select { padding-right: 24px; }
 
@@ -239,7 +270,8 @@ select { padding-right: 24px; }
 @media (min-width: 640px) and (max-width: 899px) {
   .experiment { width: calc(100% - 40px); }
   .experiment-figure { grid-template-columns: minmax(0, 1fr) 254px; gap: 18px; }
-  .controls { padding-left: 16px; gap: 10px; }
+  .controls { padding-left: 16px; }
+  .group-fields { column-gap: 10px; }
 }
 
 @media (max-width: 639px) {
@@ -248,7 +280,8 @@ select { padding-right: 24px; }
   .introduction p { font-size: 16px; }
   .experiment-figure { display: block; margin-top: 10px; }
   .ink-stage { height: clamp(300px, 58svh, 540px); }
-  .controls { border-left: 0; border-top: 1px solid var(--rule); grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; padding: 16px 0 0; gap: 12px 18px; }
+  .controls { border-left: 0; border-top: 1px solid var(--rule); padding: 16px 0 0; gap: 15px; }
+  .group-fields { gap: 9px 18px; }
   button { padding-right: 12px; padding-left: 12px; }
   #toggle { min-width: 72px; }
   .equation { grid-template-columns: 1fr; gap: 9px; margin: 20px 0; }
@@ -256,24 +289,31 @@ select { padding-right: 24px; }
   .model-copy h2 { font-size: 21px; }
 }
 
-@media (min-width: 640px) and (max-height: 700px) {
+@media (min-width: 640px) and (max-height: 760px) {
   .experiment { padding: 10px 0; }
   .introduction { padding-bottom: 10px; }
   .experiment-figure { margin-top: 12px; }
-  .controls { row-gap: 3px; }
+  .controls { gap: 7px; }
+  .control-group + .control-group { padding-top: 8px; }
+  .control-group legend { padding-bottom: 5px; }
+  .group-fields { row-gap: 4px; }
+  .controls button, .controls select, .controls input[type="number"], .controls input[type="text"] { min-height: 32px; padding-top: 4px; padding-bottom: 4px; }
+  .controls input[type="color"] { height: 32px; }
+  .controls input[type="range"] { height: 22px; margin-top: 2px; }
   .ink-stage { height: clamp(280px, calc(100svh - 156px), 600px); }
 }
 
 @media (max-width: 359px) {
   .introduction { gap: 10px; flex-wrap: wrap; }
-  .controls { column-gap: 12px; }
+  .group-fields { column-gap: 12px; }
 }
 
 @media (pointer: coarse) {
-  button, select, input[type="number"] { min-height: 44px; }
-  select, input[type="number"] { font-size: 16px; }
-  input[type="range"] { height: 44px; }
-  .second-ink-toggle { min-height: 44px; }
+  button, select, input[type="number"], input[type="text"], .controls button, .controls select, .controls input[type="number"], .controls input[type="text"] { min-height: 44px; }
+  select, input[type="number"], input[type="text"] { font-size: 16px; }
+  input[type="color"], .controls input[type="color"] { height: 44px; width: 44px; }
+  .colour-parameter { grid-template-columns: auto 44px minmax(0, 1fr); }
+  input[type="range"], .controls input[type="range"] { height: 44px; }
   .model-details summary { min-height: 44px; padding: 10px 0; }
 }
 
